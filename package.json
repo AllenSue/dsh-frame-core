@@ -1,0 +1,13 @@
+{
+  "name": "@deepseek-ai/dsh-client-frames",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Frame manager core: a window layout of plain data with invertible operations",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node ../../../tools/run-tests.ts"
+  }
+}
