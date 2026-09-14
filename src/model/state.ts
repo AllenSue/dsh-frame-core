@@ -54,7 +54,11 @@ export interface FrameStateOptions {
  * @returns a single-frame state with nothing floating.
  */
 export function createFrameState(options: FrameStateOptions): FrameState {
-  let types: FrameTypeRegistry = registerType(EMPTY_REGISTRY, options.startup)
+  // The startup type seeds the first frame; registering it belongs to whoever
+  // provides its body, which is a different plugin. Registering here would make
+  // the renderer claim a type it does not own, and the provider's own later
+  // registration would collide with it.
+  let types: FrameTypeRegistry = EMPTY_REGISTRY
   for (const definition of options.types ?? []) types = registerType(types, definition)
 
   const minter = createIdMinter()

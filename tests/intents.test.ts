@@ -14,7 +14,7 @@ const CONVERSATION: FrameTypeDefinition = { id: 'conversation', title: () => 'Co
 function ready(startup: FrameTypeDefinition = CONVERSATION, budget = 4): FrameState {
   const platform = { id: 'react', capabilities: { ...REACT_CAPABILITIES, maxDockPanes: budget } }
   return withMeasurements(
-    createFrameState({ startup, platform }),
+    createFrameState({ startup, platform, types: [startup] }),
     { viewport: { width: 1000, height: 800 } },
   )
 }

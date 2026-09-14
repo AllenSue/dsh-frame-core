@@ -14,7 +14,7 @@ const CONVERSATION: FrameTypeDefinition = { id: 'conversation', title: () => 'Co
 /** A measured state on the named target. */
 function ready(capabilities = REACT_CAPABILITIES): FrameState {
   return withMeasurements(
-    createFrameState({ startup: CONVERSATION, platform: { id: 'test', capabilities } }),
+    createFrameState({ startup: CONVERSATION, platform: { id: 'test', capabilities }, types: [CONVERSATION] }),
     { viewport: { width: 1000, height: 800 } },
   )
 }
