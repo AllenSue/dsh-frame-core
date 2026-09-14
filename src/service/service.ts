@@ -9,18 +9,20 @@
  * The core stays dependency-free: it publishes itself through the narrow host
  * shape below rather than importing a container.
  */
-import type { PaneId } from '../vendor/ui-dockkit/contract/types.ts'
+import type { PaneId, PaneNode, SplitAxis, SplitId, TabId } from '../vendor/ui-dockkit/contract/types.ts'
 import type { FramePlatform } from '../model/platform.ts'
 import type { FrameMeasurements, FrameState } from '../model/state.ts'
 import { createFrameState, withMeasurements, withPlatform } from '../model/state.ts'
 import type { FrameTypeDefinition } from '../model/types.ts'
 import { registerType } from '../model/types.ts'
 import type { FrameResult } from '../ops/result.ts'
-import { fail, ok } from '../ops/result.ts'
-import type { FocusDirection } from '../ops/intents.ts'
+import { fail } from '../ops/result.ts'
+import type { DropTarget, FocusDirection } from '../ops/intents.ts'
 import {
-  closeFrame, dockFrame, floatFrame, focusFrame, moveFocus, splitFrame,
+  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, moveFocus, placeFloat, placeTab, resizeSplit,
+  splitFrame,
 } from '../ops/intents.ts'
+import type { NormalizedRect } from '../geometry/rect.ts'
 import { project } from '../project/project.ts'
 import type { FrameViewProjection } from '../project/project.ts'
 
@@ -45,7 +47,7 @@ export interface FramesService {
   /** Subscribe to projection changes; the reference only changes on a change. */
   subscribe(listener: () => void): () => void
 
-  split(paneId?: PaneId, seed?: string): FrameResult<FrameState>
+  split(paneId?: PaneId, seed?: string, axis?: SplitAxis): FrameResult<FrameState>
   close(paneId?: PaneId): FrameResult<FrameState>
   float(paneId?: PaneId): FrameResult<FrameState>
   dock(paneId?: PaneId): FrameResult<FrameState>
@@ -53,6 +55,18 @@ export interface FramesService {
   moveFocus(direction: FocusDirection): FrameResult<FrameState>
   /** Open a frame of `typeId`, or focus the one already showing it. */
   open(typeId: string): FrameResult<FrameState>
+
+  /**
+   * The one operation a pointer release produces, whatever the gesture was.
+   * Geometry stays in the renderer; the decision is made here.
+   */
+  drop(tabId: TabId, target: DropTarget, seed?: string): FrameResult<FrameState>
+  /** Move a chip to another caret slot in a strip. */
+  placeTab(tabId: TabId, toPaneId: PaneId, index: number): FrameResult<FrameState>
+  /** Record where a divider drag left a split. */
+  resizeSplit(splitId: SplitId, sizes: readonly number[]): FrameResult<FrameState>
+  /** Move or resize a floating frame; the gesture decides which. */
+  placeFloat(paneId: PaneId, rect: NormalizedRect): FrameResult<FrameState>
 
   /** The type of the focused frame, or `undefined` when nothing is focused. */
   activeTypeId(): string | undefined
@@ -130,16 +144,26 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
       return () => { listeners.delete(listener) }
     },
 
-    split: (paneId?: PaneId, seed?: string): FrameResult<FrameState> => adopt(splitFrame(state, paneId, seed)),
+    split: (paneId?: PaneId, seed?: string, axis?: SplitAxis): FrameResult<FrameState> =>
+      adopt(splitFrame(state, paneId, seed, axis)),
     close: (paneId?: PaneId): FrameResult<FrameState> => adopt(closeFrame(state, paneId)),
     float: (paneId?: PaneId): FrameResult<FrameState> => adopt(floatFrame(state, paneId)),
     dock: (paneId?: PaneId): FrameResult<FrameState> => adopt(dockFrame(state, paneId)),
     focus: (paneId: PaneId): FrameResult<FrameState> => adopt(focusFrame(state, paneId)),
     moveFocus: (direction: FocusDirection): FrameResult<FrameState> => adopt(moveFocus(state, direction)),
+    drop: (tabId: TabId, target: DropTarget, seed?: string): FrameResult<FrameState> =>
+      adopt(dropFrame(state, tabId, target, seed)),
+    placeTab: (tabId: TabId, toPaneId: PaneId, index: number): FrameResult<FrameState> =>
+      adopt(placeTab(state, tabId, toPaneId, index)),
+    resizeSplit: (splitId: SplitId, sizes: readonly number[]): FrameResult<FrameState> =>
+      adopt(resizeSplit(state, splitId, sizes)),
+    placeFloat: (paneId: PaneId, rect: NormalizedRect): FrameResult<FrameState> =>
+      adopt(placeFloat(state, paneId, rect)),
 
     open(typeId: string): FrameResult<FrameState> {
       const pane = Object.values(state.layout.nodes)
-        .find((node) => node.kind === 'pane' && node.tabs.some((tabId) => state.layout.tabs[tabId]?.kind === typeId))
+        .find((node): node is PaneNode =>
+          node.kind === 'pane' && node.tabs.some((tabId) => state.layout.tabs[tabId]?.kind === typeId))
       if (pane !== undefined) return adopt(focusFrame(state, pane.id))
       if (state.layout.nodes[state.layout.rootId] === undefined) {
         return fail('frames/unknown-target', 'the layout has no root pane')

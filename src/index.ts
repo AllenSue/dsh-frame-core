@@ -21,10 +21,20 @@ export type { FrameMeasurements, FrameState, FrameStateOptions } from './model/s
 export { createFrameState, withLayout, withMeasurements, withPlatform } from './model/state.ts'
 
 export type { Extent, NormalizedRect } from './geometry/rect.ts'
-export { dividerRect, FULL_RECT, splitRect, toExtent } from './geometry/rect.ts'
+export {
+  clampFloatRect, dividerRect, FULL_RECT, MIN_FLOAT_FRACTION, splitRect, toExtent,
+} from './geometry/rect.ts'
 
 export type { PlacedDivider, PlacedPane } from './geometry/rects.ts'
 export { layoutRects, placedPanes } from './geometry/rects.ts'
+
+// The dock regions a pointer can release in, and the two limits a drag answers
+// to. A renderer needs them to turn pointer coordinates into an intent; they are
+// re-exported rather than reached for, so the renderer imports one module only.
+export { clampSizes, DOCK_EDGE_FRACTION, DOCK_ZONES, MIN_PANE_FRACTION, zoneAt } from './vendor/ui-dockkit/engine/constraints.ts'
+export type {
+  DockZone, NodeId, PaneId, SplitId, TabId,
+} from './vendor/ui-dockkit/contract/types.ts'
 
 export type { FrameErrorCode, FrameResult } from './ops/result.ts'
 export { fail, ok } from './ops/result.ts'
@@ -32,15 +42,19 @@ export { fail, ok } from './ops/result.ts'
 export type { FrameHistory, HistoryEntry } from './ops/history.ts'
 export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/history.ts'
 
-export type { FocusDirection } from './ops/intents.ts'
+export type { DropTarget, FocusDirection } from './ops/intents.ts'
 export {
-  closeFrame, dockFrame, floatFrame, focusFrame, moveFocus, neighbour, redo, splitFrame, undo,
+  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, moveFocus, neighbour, placeFloat, placeTab,
+  redo, resizeSplit, splitFrame, undo,
 } from './ops/intents.ts'
 
 export type {
-  Degradation, FloatPresentation, FrameViewProjection, ProjectedDivider, ProjectedFloat,
+  Degradation, FrameViewProjection, ProjectedDivider, ProjectedFloat,
   ProjectedPane, ProjectedTab, SplitBlock,
 } from './project/project.ts'
+// The projection's own name for how a float is presented; the capability type
+// above shares the word, so it is re-exported under a distinct one.
+export type { FloatPresentation as ProjectedFloatPresentation } from './project/project.ts'
 export { project } from './project/project.ts'
 
 export type { FramesHost, FramesService, FramesServiceOptions } from './service/service.ts'

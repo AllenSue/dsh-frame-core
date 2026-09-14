@@ -5,7 +5,7 @@
  * `project` is a pure function of state. A capability limit is applied here and
  * never written back to the model, so one saved preset loads on every target.
  */
-import type { PaneId, SplitId } from '../vendor/ui-dockkit/contract/types.ts'
+import type { PaneId, SplitId, TabId } from '../vendor/ui-dockkit/contract/types.ts'
 import { dividerRect, FULL_RECT, splitRect, toExtent, type NormalizedRect } from '../geometry/rect.ts'
 import type { FrameState } from '../model/state.ts'
 import { getType } from '../model/types.ts'
@@ -15,6 +15,8 @@ export type SplitBlock = 'budget' | 'narrow'
 
 /** One tab as a renderer draws it. */
 export interface ProjectedTab {
+  /** The tab's identity: what a drag names when it moves this chip. */
+  readonly id: TabId
   readonly typeId: string
   readonly title: string
   readonly active: boolean
@@ -35,8 +37,14 @@ export interface ProjectedPane {
 export interface ProjectedDivider {
   readonly splitId: SplitId
   readonly axis: 'row' | 'column'
+  /** Which divider of that split this is: it sits after child `index`. */
+  readonly index: number
   /** Boundary position along the parent's axis, as a fraction of the parent. */
   readonly at: number
+  /** The split's shares, so a drag can compute where the boundary would land. */
+  readonly sizes: readonly number[]
+  /** The split's own area; a share is a fraction of this, not of the window. */
+  readonly parent: NormalizedRect
   readonly rect: NormalizedRect
 }
 
@@ -124,6 +132,7 @@ function projectTabs(walk: Walk, paneId: PaneId): readonly ProjectedTab[] {
     if (record === undefined) continue
     const definition = getType(walk.state.types, record.kind)
     tabs.push({
+      id: record.id,
       typeId: record.kind,
       title: definition === undefined ? record.title : definition.title(),
       active: tabId === pane.activeTabId,
@@ -164,7 +173,10 @@ function visit(walk: Walk, nodeId: string, rect: NormalizedRect): void {
       walk.dividers.push({
         splitId: node.id,
         axis: node.axis,
+        index: index - 1,
         at: boundaryAt(node.sizes, index - 1),
+        sizes: node.sizes,
+        parent: rect,
         rect: dividerRect(rect, node.axis, node.sizes, index - 1),
       })
     }

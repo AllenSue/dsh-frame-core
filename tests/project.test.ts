@@ -40,7 +40,12 @@ test('a configuration-free state projects one frame filling the area', () => {
   assert.deepEqual(view.degradations, [])
   assert.equal(view.docked.length, 1)
   assert.deepEqual(view.docked[0]?.rect, FULL_RECT)
-  assert.deepEqual(view.docked[0]?.tabs, [{ typeId: 'conversation', title: 'Conversation', active: true }])
+  // The chip carries the tab's identity, because a drag names the tab it moves.
+  assert.deepEqual(
+    view.docked[0]?.tabs.map((tab) => ({ ...tab, id: 'minted' })),
+    [{ id: 'minted', typeId: 'conversation', title: 'Conversation', active: true }],
+  )
+  assert.equal(typeof view.docked[0]?.tabs[0]?.id, 'string')
   assert.equal(view.active, state.layout.activePaneId)
 })
 

@@ -78,3 +78,26 @@ export function dividerRect(
 export function toExtent(rect: NormalizedRect, extent: Extent): Extent {
   return { width: rect.width * extent.width, height: rect.height * extent.height }
 }
+
+/** Smallest a floating frame may become, as a fraction of the drawable area. */
+export const MIN_FLOAT_FRACTION = { width: 0.15, height: 0.15 } as const
+
+/**
+ * Force a rectangle inside the drawable area and above the floating size floor.
+ *
+ * The model keeps a *normalized* rectangle, so the engine's pixel minimum cannot
+ * be used directly; this is the core's own floor. Position is clamped against the
+ * clamped size, so the result is always fully inside the area.
+ * @param rect - the rectangle a gesture reached.
+ * @returns the rectangle the model may hold.
+ */
+export function clampFloatRect(rect: NormalizedRect): NormalizedRect {
+  const width = Math.min(1, Math.max(MIN_FLOAT_FRACTION.width, rect.width))
+  const height = Math.min(1, Math.max(MIN_FLOAT_FRACTION.height, rect.height))
+  return {
+    width,
+    height,
+    x: Math.min(Math.max(0, rect.x), 1 - width),
+    y: Math.min(Math.max(0, rect.y), 1 - height),
+  }
+}

@@ -6,9 +6,16 @@
  * it, and an accepted intent becomes exactly one history entry. A refusal returns
  * a result and leaves the state untouched.
  */
-import { planFloatTab, planSplitPane, planUnfloatPane } from '../vendor/ui-dockkit/engine/planner.ts'
-import type { LayoutOp, PaneId, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
+import { canSplit, clampSizes, MAX_DOCK_PANES, zoneSplit } from '../vendor/ui-dockkit/engine/constraints.ts'
+import type { TabFactory } from '../vendor/ui-dockkit/engine/initial.ts'
+import {
+  planDropTab, planFloatTab, planPlaceTab, planResizeSplit, planSettle, planSplitPane, planUnfloatPane,
+} from '../vendor/ui-dockkit/engine/planner.ts'
+import type {
+  DockZone, LayoutOp, PaneId, SplitAxis, SplitId, TabId, TabRecord,
+} from '../vendor/ui-dockkit/contract/types.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
+import { clampFloatRect } from '../geometry/rect.ts'
 import { placedPanes } from '../geometry/rects.ts'
 import type { FrameState } from '../model/state.ts'
 import { withLayout } from '../model/state.ts'
@@ -41,6 +48,27 @@ function commit(state: FrameState, ops: readonly LayoutOp[]): FrameResult<FrameS
   return ok({ ...next, history: pushIntent(state.history, entry) })
 }
 
+/**
+ * The tab factory for a seeding type.
+ *
+ * Seeding is the content side's decision: the core is told which *type* should
+ * fill a pane it would otherwise leave empty, and never decides that itself.
+ * @param state - the state holding the registry.
+ * @param seed - the type id to seed with, or `undefined` to seed nothing.
+ * @returns the factory, or `undefined` when no type was named.
+ */
+function seedFactory(state: FrameState, seed: string | undefined): TabFactory | undefined {
+  if (seed === undefined) return undefined
+  const definition = getType(state.types, seed)
+  if (definition === undefined) return undefined
+  return (id: TabId): TabRecord => ({
+    id,
+    kind: definition.id,
+    contentId: definition.id,
+    title: definition.title(),
+  })
+}
+
 /** Whether the renderer has reported enough for the core to judge geometry. */
 function hasGeometry(state: FrameState): boolean {
   return state.platform !== undefined && state.measurements !== undefined
@@ -56,13 +84,19 @@ function roomForTwo(rect: NormalizedRect, state: FrameState): boolean {
 }
 
 /**
- * Split a pane to its right.
+ * Split a pane along an axis.
  * @param state - the state to change.
  * @param paneId - the reference pane; defaults to the focused one.
  * @param seed - frame type the new pane starts with; omit for an empty pane.
+ * @param axis - `row` puts the new pane to the right, `column` below it.
  * @returns the next state, or why the split was refused.
  */
-export function splitFrame(state: FrameState, paneId?: PaneId, seed?: string): FrameResult<FrameState> {
+export function splitFrame(
+  state: FrameState,
+  paneId?: PaneId,
+  seed?: string,
+  axis: SplitAxis = 'row',
+): FrameResult<FrameState> {
   if (!hasGeometry(state)) {
     return fail('frames/not-measured', 'no renderer has reported its drawable extent yet')
   }
@@ -71,8 +105,7 @@ export function splitFrame(state: FrameState, paneId?: PaneId, seed?: string): F
   const placed = panes.find((pane) => pane.id === target)
   if (placed === undefined) return fail('frames/unknown-target', `pane "${target}" is not drawn`)
 
-  const seeded = seed === undefined ? undefined : getType(state.types, seed)
-  if (seed !== undefined && seeded === undefined) {
+  if (seed !== undefined && getType(state.types, seed) === undefined) {
     return fail('frames/unknown-type', `type "${seed}" is not registered`)
   }
   if (activePolicy(state, target).splittable === false) {
@@ -85,14 +118,8 @@ export function splitFrame(state: FrameState, paneId?: PaneId, seed?: string): F
   if (!roomForTwo(placed.rect, state)) {
     return fail('frames/too-narrow', `pane "${target}" has no room for two halves`)
   }
-  const makeTab = seeded === undefined ? undefined : (id: TabId): TabRecord => ({
-    id,
-    kind: seeded.id,
-    contentId: seeded.id,
-    title: seeded.title(),
-  })
   // The engine keeps its own pane cap, so this budget can only tighten it.
-  return commit(state, planSplitPane(state.layout, state.minter.next, target, makeTab))
+  return commit(state, planSplitPane(state.layout, state.minter.next, target, seedFactory(state, seed), axis))
 }
 
 /**
@@ -259,6 +286,206 @@ export function dockFrame(state: FrameState, paneId?: PaneId): FrameResult<Frame
   }
   if (node.host !== 'float') return ok(state)
   return commit(state, planUnfloatPane(state.layout, target))
+}
+
+/**
+ * Where a dragged frame may be released.
+ *
+ * `dock` names both halves of the release in one value: which pane is under the
+ * pointer and which of its five regions the pointer sits in. `float` is the
+ * release over nothing — the frame leaves the docked tree and becomes a window.
+ */
+export type DropTarget =
+  | { readonly kind: 'dock'; readonly paneId: PaneId; readonly zone: DockZone }
+  | { readonly kind: 'float'; readonly rect?: NormalizedRect }
+
+/** The pane holding `tabId`, docked or floating. */
+function paneHolding(state: FrameState, tabId: TabId): PaneId | undefined {
+  for (const node of Object.values(state.layout.nodes)) {
+    if (node.kind === 'pane' && node.tabs.includes(tabId)) return node.id
+  }
+  return undefined
+}
+
+/**
+ * Release a dragged frame on a target.
+ *
+ * This is the one semantic operation every pointer release produces, whatever
+ * the pointer did: the geometry lives in the renderer, and the *decision* — move
+ * the frame into a pane, split a pane to seat it, or take it out into a window —
+ * is made here, once, under the same governance as the keyboard paths. A drop
+ * the model cannot carry out is refused and changes nothing.
+ * @param state - the state to change.
+ * @param tabId - the tab that was dragged.
+ * @param target - what the pointer released on.
+ * @param seed - type that backfills a pane the drop would otherwise empty; the
+ *   content side names it, exactly as `splitFrame` asks it to.
+ * @returns the next state, or why the release was refused.
+ */
+export function dropFrame(
+  state: FrameState,
+  tabId: TabId,
+  target: DropTarget,
+  seed?: string,
+): FrameResult<FrameState> {
+  const sourceId = paneHolding(state, tabId)
+  const source = sourceId === undefined ? undefined : state.layout.nodes[sourceId]
+  if (sourceId === undefined || source === undefined || source.kind !== 'pane') {
+    return fail('frames/unknown-target', `tab "${tabId}" is not drawn anywhere`)
+  }
+  if (seed !== undefined && getType(state.types, seed) === undefined) {
+    return fail('frames/unknown-type', `type "${seed}" is not registered`)
+  }
+  const makeTab = seedFactory(state, seed)
+
+  if (target.kind === 'float') {
+    const capabilities = state.platform?.capabilities
+    if (capabilities === undefined) {
+      return fail('frames/not-measured', 'no renderer has declared its capabilities yet')
+    }
+    if (capabilities.floats === 'none') {
+      return fail('frames/unsupported-on-platform', 'this target cannot draw a floating frame')
+    }
+    // Already the only thing in a window: pulling it out would move nothing.
+    if (source.host === 'float' && source.tabs.length === 1) return ok(state)
+    const definition = getType(state.types, state.layout.tabs[tabId]?.kind ?? '')
+    if (definition?.hosts !== undefined && !definition.hosts.includes('float')) {
+      return fail('frames/policy-refused', `the content of tab "${tabId}" refuses to float`)
+    }
+    const planned = planFloatTab(state.layout, state.minter.next, tabId, target.rect ?? nextFloatRect(state))
+    const ops: LayoutOp[] = [...planned.ops]
+    // A docked pane that is not the root merges away once its last tab leaves,
+    // exactly as it does when that tab is closed or floated by the key map.
+    if (source.host === 'dock' && sourceId !== state.layout.rootId && source.tabs.length === 1) {
+      ops.push({ type: 'merge', paneId: sourceId })
+    }
+    return commit(state, ops)
+  }
+
+  const paneId = target.paneId
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane' || node.host !== 'dock') {
+    return fail('frames/unknown-target', `pane "${paneId}" is not a docked pane`)
+  }
+  if (zoneSplit(target.zone) !== undefined) {
+    // An edge release is a split, so it answers to the same three limits a
+    // keyboard split does — and refuses in the same words.
+    const panes = placedPanes(state.layout)
+    const placed = panes.find((pane) => pane.id === paneId)
+    if (placed === undefined) return fail('frames/unknown-target', `pane "${paneId}" is not drawn`)
+    if (activePolicy(state, paneId).splittable === false) {
+      return fail('frames/policy-refused', `the content of pane "${paneId}" refuses to be split`)
+    }
+    const budget = state.platform?.capabilities.maxDockPanes
+    if (budget !== undefined && panes.length >= budget) {
+      return fail('frames/pane-budget-exhausted', `the docked area allows ${budget} pane(s)`)
+    }
+    // The engine keeps its own cap, so a platform that declares none is still
+    // bounded — and says so rather than quietly changing nothing.
+    if (!canSplit(state.layout)) {
+      return fail('frames/pane-budget-exhausted', `the docked area allows ${MAX_DOCK_PANES} pane(s)`)
+    }
+    if (!roomForTwo(placed.rect, state)) {
+      return fail('frames/too-narrow', `pane "${paneId}" has no room for two halves`)
+    }
+  }
+
+  const ops = planDropTab(state.layout, state.minter.next, tabId, paneId, target.zone, makeTab)
+  // A release that changes nothing is not a refusal: the frame lands where it
+  // already was, and recording that would be one undo step for no movement.
+  if (ops.length === 0) return ok(state)
+  // Emptying a pane is the drop's *consequence*, not its intent, so the cleanup
+  // rides along in the same history entry rather than becoming its own step.
+  const settled = planSettle(applyOps(state.layout, ops).layout, state.minter.next, makeTab)
+  return commit(state, [...ops, ...settled])
+}
+
+/**
+ * Move a chip to another caret slot in the strip it already sits in.
+ *
+ * Crossing panes is a *drop*, not a placement: a drop carries the frame's host
+ * with it and settles the pane it empties, which a slot index cannot express.
+ * @param state - the state to change.
+ * @param tabId - the tab being moved.
+ * @param toPaneId - the strip it lands in; must be the one it is already in.
+ * @param index - caret slot counted over the chips as drawn.
+ * @returns the next state; a placement that changes nothing is accepted as-is.
+ */
+export function placeTab(
+  state: FrameState,
+  tabId: TabId,
+  toPaneId: PaneId,
+  index: number,
+): FrameResult<FrameState> {
+  const node = state.layout.nodes[toPaneId]
+  if (node === undefined || node.kind !== 'pane' || node.host !== 'dock') {
+    return fail('frames/unknown-target', `pane "${toPaneId}" is not a docked pane`)
+  }
+  if (!node.tabs.includes(tabId)) {
+    return fail('frames/unknown-target', `tab "${tabId}" is not in pane "${toPaneId}"`)
+  }
+  const ops = planPlaceTab(state.layout, tabId, toPaneId, index)
+  if (ops.length === 0) return ok(state)
+  return commit(state, ops)
+}
+
+/**
+ * Record the net sizes a divider drag reached.
+ * @param state - the state to change.
+ * @param splitId - the split whose divider moved.
+ * @param sizes - the fractions the drag reached, already clamped by the renderer.
+ * @returns the next state, or why the resize was refused.
+ */
+export function resizeSplit(
+  state: FrameState,
+  splitId: SplitId,
+  sizes: readonly number[],
+): FrameResult<FrameState> {
+  const node = state.layout.nodes[splitId]
+  if (node === undefined || node.kind !== 'split') {
+    return fail('frames/unknown-target', `split "${splitId}" does not exist`)
+  }
+  if (sizes.length !== node.sizes.length) {
+    return fail('frames/unknown-target', `split "${splitId}" has ${node.sizes.length} child(ren), not ${sizes.length}`)
+  }
+  const clamped = clampSizes(sizes)
+  const unchanged = clamped.every((size, index) => Math.abs(size - (node.sizes[index] ?? 0)) < 1e-9)
+  if (unchanged) return ok(state)
+  return commit(state, planResizeSplit(splitId, clamped))
+}
+
+/**
+ * Move or resize a floating frame.
+ *
+ * One intent covers both because one pointer gesture drives both: dragging the
+ * title bar changes the position alone, dragging a corner changes the rectangle.
+ * The operation recorded is whichever one the pointer actually produced, so
+ * stepping back restores exactly what moved.
+ * @param state - the state to change.
+ * @param paneId - the floating pane.
+ * @param rect - where the gesture left it, in fractions of the drawable area.
+ * @returns the next state, or why the move was refused.
+ */
+export function placeFloat(
+  state: FrameState,
+  paneId: PaneId,
+  rect: NormalizedRect,
+): FrameResult<FrameState> {
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane' || node.host !== 'float') {
+    return fail('frames/unknown-target', `pane "${paneId}" is not floating`)
+  }
+  const current = node.rect ?? FLOAT_START
+  // The gesture previews with the same clamp, so what the user let go of is
+  // exactly what the model records.
+  const next = clampFloatRect(rect)
+  const same = current.x === next.x && current.y === next.y
+    && current.width === next.width && current.height === next.height
+  if (same) return ok(state)
+  const op: LayoutOp = current.width === next.width && current.height === next.height
+    ? { type: 'moveFloat', paneId, x: next.x, y: next.y }
+    : { type: 'resizeFloat', paneId, rect: next }
+  return commit(state, [op])
 }
 
 /**
