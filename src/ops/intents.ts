@@ -6,7 +6,7 @@
  * it, and an accepted intent becomes exactly one history entry. A refusal returns
  * a result and leaves the state untouched.
  */
-import { planSplitPane } from '../vendor/ui-dockkit/engine/planner.ts'
+import { planFloatTab, planSplitPane, planUnfloatPane } from '../vendor/ui-dockkit/engine/planner.ts'
 import type { LayoutOp, PaneId, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { placedPanes } from '../geometry/rects.ts'
@@ -182,6 +182,83 @@ export function neighbour(state: FrameState, direction: FocusDirection): PaneId 
 export function moveFocus(state: FrameState, direction: FocusDirection): FrameResult<FrameState> {
   const target = neighbour(state, direction)
   return target === undefined ? ok(state) : focusFrame(state, target)
+}
+
+/** Where the first floating frame sits, in fractions of the drawable area. */
+const FLOAT_START: NormalizedRect = { x: 0.55, y: 0.15, width: 0.4, height: 0.5 }
+
+/** Each further floating frame steps up and left, then wraps. */
+const FLOAT_CASCADE = 0.04
+
+/**
+ * A normalized rectangle for the next floating frame.
+ *
+ * The engine's own default is expressed in pixels, which a normalized model
+ * cannot use, so the core supplies its own rather than reading those constants.
+ */
+function nextFloatRect(state: FrameState): NormalizedRect {
+  const step = (state.layout.floats.length % 4) * FLOAT_CASCADE
+  return {
+    x: FLOAT_START.x - step,
+    y: FLOAT_START.y + step,
+    width: FLOAT_START.width,
+    height: FLOAT_START.height,
+  }
+}
+
+/**
+ * Move a docked pane's content into a floating frame.
+ * @param state - the state to change.
+ * @param paneId - the pane to float; defaults to the focused one.
+ * @returns the next state, or why the move was refused.
+ */
+export function floatFrame(state: FrameState, paneId?: PaneId): FrameResult<FrameState> {
+  const capabilities = state.platform?.capabilities
+  if (capabilities === undefined) {
+    return fail('frames/not-measured', 'no renderer has declared its capabilities yet')
+  }
+  if (capabilities.floats === 'none') {
+    return fail('frames/unsupported-on-platform', 'this target cannot draw a floating frame')
+  }
+  const target = paneId ?? state.layout.activePaneId
+  const node = state.layout.nodes[target]
+  if (node === undefined || node.kind !== 'pane') {
+    return fail('frames/unknown-target', `pane "${target}" does not exist`)
+  }
+  if (node.host === 'float') return ok(state)
+  if (node.activeTabId === undefined) {
+    return fail('frames/unknown-target', `pane "${target}" holds nothing to float`)
+  }
+
+  const typeId = activeTypeId(state, target)
+  const definition = typeId === undefined ? undefined : getType(state.types, typeId)
+  if (definition?.hosts !== undefined && !definition.hosts.includes('float')) {
+    return fail('frames/policy-refused', `the content of pane "${target}" refuses to float`)
+  }
+
+  const planned = planFloatTab(state.layout, state.minter.next, node.activeTabId, nextFloatRect(state))
+  // A docked pane that is not the root merges away once its last tab leaves,
+  // exactly as it does when that tab is closed.
+  const ops: LayoutOp[] = target !== state.layout.rootId && node.tabs.length === 1
+    ? [...planned.ops, { type: 'merge', paneId: target }]
+    : [...planned.ops]
+  return commit(state, ops)
+}
+
+/**
+ * Send a floating frame's content back into the docked tree.
+ * @param state - the state to change.
+ * @param paneId - the floating pane; defaults to the focused one.
+ * @returns the next state, or why the move was refused.
+ */
+export function dockFrame(state: FrameState, paneId?: PaneId): FrameResult<FrameState> {
+  const target = paneId ?? state.layout.activePaneId
+  const node = state.layout.nodes[target]
+  if (node === undefined || node.kind !== 'pane') {
+    return fail('frames/unknown-target', `pane "${target}" does not exist`)
+  }
+  if (node.host !== 'float') return ok(state)
+  return commit(state, planUnfloatPane(state.layout, target))
 }
 
 /**

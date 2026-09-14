@@ -33,9 +33,12 @@ export type { FrameHistory, HistoryEntry } from './ops/history.ts'
 export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/history.ts'
 
 export type { FocusDirection } from './ops/intents.ts'
-export { closeFrame, focusFrame, moveFocus, neighbour, redo, splitFrame, undo } from './ops/intents.ts'
+export {
+  closeFrame, dockFrame, floatFrame, focusFrame, moveFocus, neighbour, redo, splitFrame, undo,
+} from './ops/intents.ts'
 
 export type {
-  Degradation, FrameViewProjection, ProjectedDivider, ProjectedPane, ProjectedTab, SplitBlock,
+  Degradation, FloatPresentation, FrameViewProjection, ProjectedDivider, ProjectedFloat,
+  ProjectedPane, ProjectedTab, SplitBlock,
 } from './project/project.ts'
 export { project } from './project/project.ts'

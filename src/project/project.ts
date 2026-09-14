@@ -40,9 +40,23 @@ export interface ProjectedDivider {
   readonly rect: NormalizedRect
 }
 
+/** How a target draws a floating frame. */
+export type FloatPresentation = 'window' | 'overlay'
+
+/** One floating frame. */
+export interface ProjectedFloat {
+  readonly id: PaneId
+  readonly rect: NormalizedRect
+  /** What the target should do with it: draw a positioned panel, or a switchable overlay. */
+  readonly presentation: FloatPresentation
+  readonly tabs: readonly ProjectedTab[]
+  /** Whether the target may honour `rect`; false means it places the frame itself. */
+  readonly rectHonoured: boolean
+}
+
 /** A fact the target cannot draw, reported rather than silently dropped. */
 export interface Degradation {
-  readonly kind: 'pane-dropped'
+  readonly kind: 'pane-dropped' | 'float-dropped' | 'rect-ignored'
   readonly target: string
   readonly message: string
 }
@@ -53,6 +67,8 @@ export interface FrameViewProjection {
   /** The target's id, or `unattached` before one declares its capabilities. */
   readonly platform: string
   readonly docked: readonly ProjectedPane[]
+  /** Floating frames, bottom to top. */
+  readonly floats: readonly ProjectedFloat[]
   readonly dividers: readonly ProjectedDivider[]
   readonly active: PaneId | undefined
   /** Whether the docked area is shown. */
@@ -68,6 +84,7 @@ interface Walk {
   readonly state: FrameState
   readonly budget: number | undefined
   readonly docked: ProjectedPane[]
+  readonly floats: ProjectedFloat[]
   readonly dividers: ProjectedDivider[]
   readonly degradations: Degradation[]
   paneCount: number
@@ -155,6 +172,48 @@ function visit(walk: Walk, nodeId: string, rect: NormalizedRect): void {
   })
 }
 
+/** Where a floating frame sits when the model recorded no rectangle for it. */
+const FLOAT_FALLBACK: NormalizedRect = { x: 0.55, y: 0.15, width: 0.4, height: 0.5 }
+
+/**
+ * Floating frames, bottom to top.
+ *
+ * A target that cannot float at all loses them, and one that cannot place them
+ * keeps the rectangle unread — both are reported rather than silently dropped,
+ * and neither changes the model.
+ */
+function collectFloats(walk: Walk): void {
+  const capabilities = walk.state.platform?.capabilities
+  const floats = capabilities?.floats ?? 'none'
+  for (const paneId of walk.state.layout.floats) {
+    const node = walk.state.layout.nodes[paneId]
+    if (node === undefined || node.kind !== 'pane') continue
+    if (floats === 'none') {
+      walk.degradations.push({
+        kind: 'float-dropped',
+        target: paneId,
+        message: 'this target cannot draw a floating frame',
+      })
+      continue
+    }
+    const rectHonoured = capabilities?.freeRect === true
+    if (!rectHonoured) {
+      walk.degradations.push({
+        kind: 'rect-ignored',
+        target: paneId,
+        message: 'this target places a floating frame itself; the saved rectangle is kept but not used',
+      })
+    }
+    walk.floats.push({
+      id: paneId,
+      rect: node.rect ?? FLOAT_FALLBACK,
+      presentation: floats === 'overlay' ? 'overlay' : 'window',
+      tabs: projectTabs(walk, paneId),
+      rectHonoured,
+    })
+  }
+}
+
 /**
  * Project `state` for its attached platform.
  * @param state - the state to project; it is not modified.
@@ -165,11 +224,13 @@ export function project(state: FrameState): FrameViewProjection {
     state,
     budget: state.platform?.capabilities.maxDockPanes,
     docked: [],
+    floats: [],
     dividers: [],
     degradations: [],
     paneCount: 0,
   }
   visit(walk, state.layout.rootId, FULL_RECT)
+  collectFloats(walk)
 
   const active = walk.docked.some((pane) => pane.id === state.layout.activePaneId)
     ? state.layout.activePaneId
@@ -179,6 +240,7 @@ export function project(state: FrameState): FrameViewProjection {
     revision: state.revision,
     platform: state.platform?.id ?? 'unattached',
     docked: walk.docked,
+    floats: walk.floats,
     dividers: walk.dividers,
     active,
     expanded: state.layout.expanded,
