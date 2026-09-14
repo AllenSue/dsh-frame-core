@@ -42,3 +42,6 @@ export type {
   ProjectedPane, ProjectedTab, SplitBlock,
 } from './project/project.ts'
 export { project } from './project/project.ts'
+
+export type { FramesHost, FramesService, FramesServiceOptions } from './service/service.ts'
+export { createFramesService, provideFramesService } from './service/service.ts'
