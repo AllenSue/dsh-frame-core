@@ -23,6 +23,18 @@ export { createFrameState, withLayout, withMeasurements, withPlatform } from './
 export type { Extent, NormalizedRect } from './geometry/rect.ts'
 export { dividerRect, FULL_RECT, splitRect, toExtent } from './geometry/rect.ts'
 
+export type { PlacedDivider, PlacedPane } from './geometry/rects.ts'
+export { layoutRects, placedPanes } from './geometry/rects.ts'
+
+export type { FrameErrorCode, FrameResult } from './ops/result.ts'
+export { fail, ok } from './ops/result.ts'
+
+export type { FrameHistory, HistoryEntry } from './ops/history.ts'
+export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/history.ts'
+
+export type { FocusDirection } from './ops/intents.ts'
+export { closeFrame, focusFrame, moveFocus, neighbour, redo, splitFrame, undo } from './ops/intents.ts'
+
 export type {
   Degradation, FrameViewProjection, ProjectedDivider, ProjectedPane, ProjectedTab, SplitBlock,
 } from './project/project.ts'

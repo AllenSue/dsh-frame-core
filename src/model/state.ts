@@ -4,6 +4,7 @@
 import { createIdMinter, createInitialState, type IdMinter } from '../vendor/ui-dockkit/engine/initial.ts'
 import type { LayoutState, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
 import type { Extent } from '../geometry/rect.ts'
+import { EMPTY_HISTORY, type FrameHistory } from '../ops/history.ts'
 import type { FramePlatform } from './platform.ts'
 import { EMPTY_REGISTRY, registerType, type FrameTypeRegistry } from './types.ts'
 import type { FrameTypeDefinition } from './types.ts'
@@ -26,6 +27,8 @@ export interface FrameState {
   readonly platform: FramePlatform | undefined
   readonly measurements: FrameMeasurements | undefined
   readonly activePresetId: string | undefined
+  /** Accepted intents, one entry each; the projection never reads it. */
+  readonly history: FrameHistory
   /** Advances on every accepted change; the renderer's redraw signal. */
   readonly revision: number
   readonly minter: IdMinter
@@ -68,6 +71,7 @@ export function createFrameState(options: FrameStateOptions): FrameState {
     platform: options.platform,
     measurements: undefined,
     activePresetId: undefined,
+    history: EMPTY_HISTORY,
     revision: 0,
     minter,
   }

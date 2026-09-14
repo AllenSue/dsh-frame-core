@@ -16,15 +16,19 @@ node tools/run-tests.ts        # 在工作区根目录执行
 
 ---
 
-## `src/vendor/` 是暂存副本
+## `src/vendor/` 是我们自持的副本
 
-| 暂存目录 | 来源 | 迁入仓库后 |
-|---|---|---|
-| `vendor/ui-dockkit/engine/` | `packages/client/ui-dockkit/src/engine/` | 改为从 `ui-dockkit` 的 React-free 子路径导入（T12） |
-| `vendor/ui-dockkit/contract/types.ts` | `packages/client/ui-dockkit/src/contract/types.ts` | 同上 |
-| `vendor/brand/index.ts` | `packages/util/brand/src/index.ts` | 改为 `import type { Branded } from '@deepseek-ai/dsh-brand'` |
+| 副本 | 来源 |
+|---|---|
+| `vendor/ui-dockkit/engine/` | `E:\dsh\deepseek-harness\packages\client\ui-dockkit\src\engine\`（第三方工程，只读） |
+| `vendor/ui-dockkit/contract/types.ts` | 同上，`src/contract/types.ts` |
+| `vendor/brand/index.ts` | 同上，`packages/util/brand/src/index.ts` |
 
-这三处是**临时复制**，不是设计的一部分：设计明确要求引擎只有一份，因此迁入时删除整个 `vendor/`，改为两条真实的包导入。除这一处改动外，`src/model/`、`src/geometry/`、`src/project/` 不需要变。
+**这不是临时占位，而是长期方案。** 第三方工程不可修改，而它的 `ui-dockkit` 构件是单一 ESM bundle、顶层 import 连带 React，非 React 消费者无法复用（ESM 静态 import 必然求值，tree-shaking 绕不开）。所以 `frames` 自带引擎——**副本就是我们的代码，我们负责它的正确性**，上游修复不会自动流入。
+
+出处与同步约定见台账 T12。三条硬约束：不得从 `vendor/**` 导入 React；不得依赖第三方工程的包解析；副本的任何改动都要在提交信息里说明原因。
+
+除 `vendor/` 外，`src/model/`、`src/geometry/`、`src/project/` 全部是本工作区的原创代码。
 
 ---
 
@@ -56,4 +60,4 @@ node tools/run-tests.ts        # 在工作区根目录执行
 - 浮窗投影与宿主切换（T06）
 - 治理裁决（T07）
 - 预设与序列化（T09）
-- React 渲染器 `ui-frames`（T02 的后半、T08）——需要仓库环境，工作区里没有 React
+- React 渲染器 `frames-web`（T02 的后半、T08）——需要仓库环境，工作区里没有 React
