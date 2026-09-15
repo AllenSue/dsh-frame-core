@@ -59,3 +59,8 @@ export { project } from './project/project.ts'
 
 export type { FramesHost, FramesService, FramesServiceOptions } from './service/service.ts'
 export { createFramesService, provideFramesService } from './service/service.ts'
+
+export type { Preset, PresetPort } from './preset/preset.ts'
+export {
+  canonicalLayout, mintedThrough, parsePreset, PRESET_FORMAT_VERSION, toPreset, withPreset,
+} from './preset/preset.ts'

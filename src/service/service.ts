@@ -16,7 +16,9 @@ import { createFrameState, withMeasurements, withPlatform } from '../model/state
 import type { FrameTypeDefinition } from '../model/types.ts'
 import { registerType } from '../model/types.ts'
 import type { FrameResult } from '../ops/result.ts'
-import { fail } from '../ops/result.ts'
+import { fail, ok } from '../ops/result.ts'
+import { parsePreset, toPreset, withPreset } from '../preset/preset.ts'
+import type { PresetPort } from '../preset/preset.ts'
 import type { DropTarget, FocusDirection } from '../ops/intents.ts'
 import {
   closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, moveFocus, placeFloat, placeTab, resizeSplit,
@@ -68,6 +70,17 @@ export interface FramesService {
   /** Move or resize a floating frame; the gesture decides which. */
   placeFloat(paneId: PaneId, rect: NormalizedRect): FrameResult<FrameState>
 
+  /** The preset in force, or `undefined` when the layout came from no preset. */
+  activePresetId(): string | undefined
+  /** Preset names the medium held at the last refresh, in name order. */
+  presetNames(): readonly string[]
+  /** Re-read the medium's index; a renderer calls this when it mounts. */
+  refreshPresets(): Promise<void>
+  /** Snapshot the current layout under `name`. */
+  savePreset(name: string): Promise<FrameResult<FrameState>>
+  /** Replace the layout with the stored preset `name`. */
+  applyPreset(name: string): Promise<FrameResult<FrameState>>
+
   /** The type of the focused frame, or `undefined` when nothing is focused. */
   activeTypeId(): string | undefined
   /** Whether a frame of `typeId` is open anywhere. */
@@ -80,6 +93,8 @@ export interface FramesServiceOptions {
   readonly startup: FrameTypeDefinition
   /** The renderer's declaration, when it is already known at mount time. */
   readonly platform?: FramePlatform
+  /** Where named presets live; omit and the shell simply has none. */
+  readonly presets?: PresetPort
 }
 
 /** What the service needs from a state to answer its queries. */
@@ -103,11 +118,17 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
   let state = createFrameState({ startup: options.startup, platform: options.platform })
   const listeners = new Set<() => void>()
   let snapshot: FrameViewProjection = project(state)
+  /** The medium's index, as of the last read. Presets are its only entry point. */
+  let presets: readonly string[] = []
 
   const publish = (): void => {
     snapshot = project(state)
     for (const listener of listeners) listener()
   }
+
+  /** The one refusal a shell with no medium answers every preset call with. */
+  const noMedium = <T>(): FrameResult<T> =>
+    fail('frames/unknown-preset', 'this shell has no place to keep presets')
 
   /**
    * Adopt an accepted intent and publish only when it moved the tree.
@@ -173,6 +194,50 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
 
     activeTypeId: (): string | undefined => activeType(state),
     isOpen: (typeId: string): boolean => holdsType(state, typeId),
+
+    activePresetId: (): string | undefined => state.activePresetId,
+    presetNames: (): readonly string[] => presets,
+    async refreshPresets(): Promise<void> {
+      if (options.presets === undefined) return
+      presets = [...await options.presets.list()].sort()
+      publish()
+    },
+    /**
+     * Snapshot the tree under `name`.
+     *
+     * Saving does not move the tree, so no history is recorded: the user asked
+     * for a copy, not for a layout change. All it settles is which preset the
+     * shell now considers itself to be on.
+     */
+    async savePreset(name: string): Promise<FrameResult<FrameState>> {
+      const port = options.presets
+      if (port === undefined) return noMedium()
+      if (name === '') return fail('frames/unknown-preset', 'a preset needs a name')
+      await port.write(name, toPreset(state, name))
+      presets = [...new Set([...presets, name])].sort()
+      state = { ...state, activePresetId: name, revision: state.revision + 1 }
+      publish()
+      return ok(state)
+    },
+    /**
+     * Adopt the stored preset `name`.
+     *
+     * Everything that can be wrong with it is decided before the tree moves, so
+     * a corrupt or unreadable preset leaves the shell exactly as it was.
+     */
+    async applyPreset(name: string): Promise<FrameResult<FrameState>> {
+      const port = options.presets
+      if (port === undefined) return noMedium()
+      const raw = await port.read(name)
+      if (raw === undefined) {
+        return fail('frames/unknown-preset', `there is no preset named "${name}"`)
+      }
+      const parsed = parsePreset(raw)
+      if (!parsed.ok) return parsed
+      state = withPreset(state, parsed.value)
+      publish()
+      return ok(state)
+    },
   }
 }
 
