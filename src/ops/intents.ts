@@ -643,6 +643,68 @@ export interface OpenOptions {
 }
 
 /**
+ * The smallest share a deliberate resize may leave a pane.
+ *
+ * Much smaller than the divider-drag floor, and deliberately so. That floor
+ * exists to stop a *gesture* from swallowing a neighbour by accident; a caller
+ * naming a share is stating what it wants, and the thing it wants may well be a
+ * 56px navigation rail — which is below `minPaneSize`, because `minPaneSize`
+ * governs whether a *split* leaves two usable halves and says nothing about a
+ * resize. Emacs lets a window be one line tall for the same reason.
+ */
+export const MIN_RESIZE_FRACTION = 0.02
+
+/**
+ * Give one pane a share of its parent split.
+ *
+ * The caller names a share of the parent, not pixels: it has no way to know the
+ * split that holds the pane, and the core does. What it does know is how wide it
+ * wants to be, in its own unit — so it converts once, against the viewport.
+ *
+ * The difference comes out of the siblings in proportion to what they already
+ * hold, so a pane that was twice its neighbour stays twice its neighbour.
+ * @param state - the state to change.
+ * @param paneId - the pane to resize.
+ * @param fraction - the share of its parent split it should take.
+ * @param minimum - smallest share any child may be left; defaults to the resize floor.
+ * @returns the next state, or why the resize was refused.
+ */
+export function resizePane(
+  state: FrameState,
+  paneId: PaneId,
+  fraction: number,
+  minimum: number = MIN_RESIZE_FRACTION,
+): FrameResult<FrameState> {
+  const node = state.layout.nodes[paneId]
+  if (node === undefined) return fail('frames/unknown-target', `pane "${paneId}" does not exist`)
+  const parent = Object.values(state.layout.nodes)
+    .find((candidate) => candidate.kind === 'split' && candidate.children.includes(paneId))
+  // The root pane fills the frame and has no parent, so there is no share to
+  // change. That is not an error, it is a request with nothing to do.
+  if (parent === undefined || parent.kind !== 'split') return ok(state)
+
+  const index = parent.children.indexOf(paneId)
+  const current = parent.sizes[index]
+  if (current === undefined) return fail('frames/unknown-target', `split "${parent.id}" has no share for "${paneId}"`)
+
+  const others = parent.children.reduce((sum, childId, at) => (
+    childId === paneId ? sum : sum + (parent.sizes[at] ?? 0)
+  ), 0)
+  const remaining = 1 - fraction
+  const next = parent.children.map((childId, at) => {
+    if (childId === paneId) return fraction
+    const share = parent.sizes[at] ?? 0
+    // With nothing left to take from, the remainder is split evenly — which only
+    // happens when every sibling is already at zero.
+    return others > 0 ? (share / others) * remaining : remaining / (parent.children.length - 1)
+  })
+
+  const clamped = clampSizes(next, minimum)
+  if (clamped.every((size, at) => Math.abs(size - (parent.sizes[at] ?? 0)) < 1e-9)) return ok(state)
+  return commit(state, planResizeSplit(parent.id, clamped, minimum))
+}
+
+/**
  * Step the last intent back.
  * @param state - the state to change.
  * @returns the state before that intent, or why nothing was undone.

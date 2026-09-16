@@ -24,7 +24,7 @@ import { contentList, getContent } from '../model/content.ts'
 import type { DropTarget, FocusDirection, OpenOptions } from '../ops/intents.ts'
 import {
   closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, openContent,
-  placeFloat, placeTab, registerFrame, resizeSplit, splitFrame,
+  placeFloat, placeTab, registerFrame, resizePane, resizeSplit, splitFrame,
 } from '../ops/intents.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { project } from '../project/project.ts'
@@ -69,6 +69,8 @@ export interface FramesService {
   placeTab(tabId: TabId, toPaneId: PaneId, index: number): FrameResult<FrameState>
   /** Record where a divider drag left a split. */
   resizeSplit(splitId: SplitId, sizes: readonly number[]): FrameResult<FrameState>
+  /** Give one pane a share of its parent split; the siblings give up the difference. */
+  resizePane(paneId: PaneId, fraction: number, minimum?: number): FrameResult<FrameState>
   /** Move or resize a floating frame; the gesture decides which. */
   placeFloat(paneId: PaneId, rect: NormalizedRect): FrameResult<FrameState>
 
@@ -191,6 +193,8 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
       adopt(placeTab(state, tabId, toPaneId, index)),
     resizeSplit: (splitId: SplitId, sizes: readonly number[]): FrameResult<FrameState> =>
       adopt(resizeSplit(state, splitId, sizes)),
+    resizePane: (paneId: PaneId, fraction: number, minimum?: number): FrameResult<FrameState> =>
+      adopt(resizePane(state, paneId, fraction, minimum)),
     placeFloat: (paneId: PaneId, rect: NormalizedRect): FrameResult<FrameState> =>
       adopt(placeFloat(state, paneId, rect)),
 

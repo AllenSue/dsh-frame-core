@@ -51,9 +51,9 @@ export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/his
 
 export type { DropTarget, FocusDirection, OpenOptions, Placement } from './ops/intents.ts'
 export {
-  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, neighbour,
-  openContent, placeFloat, placeTab, placementSplit, redo, registerFrame, resizeSplit, splitFrame,
-  undo,
+  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, MIN_RESIZE_FRACTION,
+  moveFocus, neighbour, openContent, placeFloat, placeTab, placementSplit, redo, registerFrame,
+  resizePane, resizeSplit, splitFrame, undo,
 } from './ops/intents.ts'
 
 export type {
