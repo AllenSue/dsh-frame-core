@@ -93,6 +93,16 @@ export interface FrameViewProjection {
   readonly revision: number
   /** The target's id, or `unattached` before one declares its capabilities. */
   readonly platform: string
+  /**
+   * The drawable area in the target's own unit, or `undefined` before one has
+   * reported it.
+   *
+   * Every renderer knows this and nothing else does, so it travels with the
+   * projection: a body that has to be a fixed number of pixels wide reads it
+   * here, and turns the width it wants into the share of the parent the core
+   * asks for.
+   */
+  readonly viewport: Extent | undefined
   readonly docked: readonly ProjectedPane[]
   /** Floating frames, bottom to top. */
   readonly floats: readonly ProjectedFloat[]
@@ -270,6 +280,7 @@ export function project(state: FrameState): FrameViewProjection {
   return {
     revision: state.revision,
     platform: state.platform?.id ?? 'unattached',
+    viewport: state.measurements?.viewport,
     docked: walk.docked,
     floats: walk.floats,
     dividers: walk.dividers,

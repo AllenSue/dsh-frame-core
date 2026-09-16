@@ -14,7 +14,7 @@ import type { FramePlatform } from '../model/platform.ts'
 import type { FrameMeasurements, FrameState } from '../model/state.ts'
 import { createFrameState, withMeasurements, withPlatform } from '../model/state.ts'
 import type { FrameTypeDefinition } from '../model/types.ts'
-import { registerType } from '../model/types.ts'
+import { hasType, registerType } from '../model/types.ts'
 import type { FrameResult } from '../ops/result.ts'
 import { fail, ok } from '../ops/result.ts'
 import { parsePreset, toPreset, withPreset } from '../preset/preset.ts'
@@ -89,6 +89,8 @@ export interface FramesService {
   activeTypeId(): string | undefined
   /** Whether a frame of `typeId` is open anywhere. */
   isOpen(typeId: string): boolean
+  /** Whether a plugin has declared `typeId`; the registry is the core's. */
+  hasType(typeId: string): boolean
 
   /** Every content the shell holds, whether or not a frame is showing it. */
   contents(): readonly FrameContent[]
@@ -211,6 +213,7 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
 
     activeTypeId: (): string | undefined => activeType(state),
     isOpen: (typeId: string): boolean => holdsType(state, typeId),
+    hasType: (typeId: string): boolean => hasType(state.types, typeId),
 
     contents: (): readonly FrameContent[] => contentList(state.contents),
     content: (id: ContentId): FrameContent | undefined => getContent(state.contents, id),
