@@ -6,7 +6,7 @@
  * never written back to the model, so one saved preset loads on every target.
  */
 import type { PaneId, SplitId, TabId } from '../vendor/ui-dockkit/contract/types.ts'
-import { dividerRect, FULL_RECT, splitRect, toExtent, type NormalizedRect } from '../geometry/rect.ts'
+import { dividerRect, FULL_RECT, splitRect, toExtent, type Extent, type NormalizedRect } from '../geometry/rect.ts'
 import type { FrameState } from '../model/state.ts'
 import { getType } from '../model/types.ts'
 
@@ -67,6 +67,25 @@ export interface Degradation {
   readonly kind: 'pane-dropped' | 'float-dropped' | 'rect-ignored'
   readonly target: string
   readonly message: string
+}
+
+/**
+ * What a renderer hands a frame body about the frame it is being drawn in.
+ *
+ * A body is content, and content sometimes has to know how much room it has — a
+ * column that draws a compact rail when it is narrow, a panel that decides it no
+ * longer fits. The renderer is the only thing that knows, so it passes it down.
+ *
+ * The area stays normalized and the viewport travels with it, so a body converts
+ * to its own unit itself and the core never learns what that unit is.
+ */
+export interface FrameBodyProps {
+  /** The frame's area, in fractions of the drawable area. */
+  readonly rect: NormalizedRect
+  /** The drawable area, so a body can turn fractions into its own unit. */
+  readonly viewport: Extent
+  /** Whether this frame currently holds focus. */
+  readonly focused: boolean
 }
 
 /** Everything a renderer needs for one frame of output. */
