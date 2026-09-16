@@ -21,7 +21,7 @@ import { parsePreset, toPreset, withPreset } from '../preset/preset.ts'
 import type { PresetPort } from '../preset/preset.ts'
 import type { ContentId, FrameContent } from '../model/content.ts'
 import { contentList, getContent } from '../model/content.ts'
-import type { DropTarget, FocusDirection } from '../ops/intents.ts'
+import type { DropTarget, FocusDirection, OpenOptions } from '../ops/intents.ts'
 import {
   closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, openContent,
   placeFloat, placeTab, registerFrame, resizeSplit, splitFrame,
@@ -95,7 +95,7 @@ export interface FramesService {
   /** Hold a content without showing it. */
   registerContent(content: FrameContent): FrameResult<FrameState>
   /** Show a content, or focus a frame already showing it. */
-  openContent(id: ContentId, axis?: SplitAxis): FrameResult<FrameState>
+  openContent(id: ContentId, options?: OpenOptions): FrameResult<FrameState>
   /** Destroy a content outright, whatever is showing it. */
   forgetContent(id: ContentId): FrameResult<FrameState>
 }
@@ -211,8 +211,8 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
     contents: (): readonly FrameContent[] => contentList(state.contents),
     content: (id: ContentId): FrameContent | undefined => getContent(state.contents, id),
     registerContent: (content: FrameContent): FrameResult<FrameState> => adopt(registerFrame(state, content)),
-    openContent: (id: ContentId, axis?: SplitAxis): FrameResult<FrameState> =>
-      adopt(openContent(state, id, axis)),
+    openContent: (id: ContentId, options?: OpenOptions): FrameResult<FrameState> =>
+      adopt(openContent(state, id, options)),
     forgetContent: (id: ContentId): FrameResult<FrameState> => adopt(forgetFrame(state, id)),
 
     activePresetId: (): string | undefined => state.activePresetId,

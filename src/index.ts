@@ -49,10 +49,11 @@ export { fail, ok } from './ops/result.ts'
 export type { FrameHistory, HistoryEntry } from './ops/history.ts'
 export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/history.ts'
 
-export type { DropTarget, FocusDirection } from './ops/intents.ts'
+export type { DropTarget, FocusDirection, OpenOptions, Placement } from './ops/intents.ts'
 export {
   closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, neighbour,
-  openContent, placeFloat, placeTab, redo, registerFrame, resizeSplit, splitFrame, undo,
+  openContent, placeFloat, placeTab, placementSplit, redo, registerFrame, resizeSplit, splitFrame,
+  undo,
 } from './ops/intents.ts'
 
 export type {

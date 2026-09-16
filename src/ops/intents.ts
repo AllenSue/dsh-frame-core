@@ -12,7 +12,7 @@ import {
   planDropTab, planFloatTab, planPlaceTab, planResizeSplit, planSettle, planSplitPane, planUnfloatPane,
 } from '../vendor/ui-dockkit/engine/planner.ts'
 import type {
-  DockZone, LayoutOp, PaneId, PaneNode, SplitAxis, SplitId, TabId, TabRecord,
+  DockZone, LayoutOp, PaneId, PaneNode, SplitAxis, SplitDirection, SplitId, TabId, TabRecord,
 } from '../vendor/ui-dockkit/contract/types.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { clampFloatRect } from '../geometry/rect.ts'
@@ -106,6 +106,29 @@ function roomForTwo(rect: NormalizedRect, state: FrameState): boolean {
 }
 
 /**
+ * Which side of a reference frame a new one takes.
+ *
+ * A vocabulary of sides rather than of axes and directions, because that is what
+ * a caller knows: a navigation column goes on the left, a panel on the right,
+ * and which way that happens to run in the tree is the core's business.
+ */
+export type Placement = 'left' | 'right' | 'above' | 'below'
+
+/**
+ * How a placement splits the reference pane.
+ * @param place - the side the new frame takes.
+ * @returns the axis and the side of the reference pane it lands on.
+ */
+export function placementSplit(place: Placement): { axis: SplitAxis; direction: SplitDirection } {
+  switch (place) {
+    case 'left': return { axis: 'row', direction: 'before' }
+    case 'right': return { axis: 'row', direction: 'after' }
+    case 'above': return { axis: 'column', direction: 'before' }
+    case 'below': return { axis: 'column', direction: 'after' }
+  }
+}
+
+/**
  * Split a pane along an axis, seeding the new half with whatever `makeTab`
  * builds.
  *
@@ -116,7 +139,8 @@ function roomForTwo(rect: NormalizedRect, state: FrameState): boolean {
  * @param state - the state to change.
  * @param paneId - the reference pane.
  * @param makeTab - builds the tab the new pane starts with; omit for an empty pane.
- * @param axis - `row` puts the new pane to the right, `column` below it.
+ * @param axis - `row` splits left/right, `column` top/bottom.
+ * @param direction - which side of the reference pane the new one takes.
  * @returns the next state, or why the split was refused.
  */
 function splitWith(
@@ -124,6 +148,7 @@ function splitWith(
   paneId: PaneId,
   makeTab: TabFactory | undefined,
   axis: SplitAxis,
+  direction: SplitDirection = 'after',
 ): FrameResult<FrameState> {
   if (!hasGeometry(state)) {
     return fail('frames/not-measured', 'no renderer has reported its drawable extent yet')
@@ -142,7 +167,10 @@ function splitWith(
     return fail('frames/too-narrow', `pane "${paneId}" has no room for two halves`)
   }
   // The engine keeps its own pane cap, so this budget can only tighten it.
-  return commit(state, planSplitPane(state.layout, state.minter.next, paneId, makeTab, axis))
+  return commit(
+    state,
+    planSplitPane(state.layout, state.minter.next, paneId, makeTab, axis, direction),
+  )
 }
 
 /**
@@ -575,13 +603,13 @@ export function forgetFrame(state: FrameState, id: ContentId): FrameResult<Frame
  * request, and a deliberate one.
  * @param state - the state to change.
  * @param contentId - the content to show; it must be registered.
- * @param axis - which way a new half runs when one has to be made.
+ * @param options - which side of which frame a new one takes when it has to be made.
  * @returns the next state, or why the content could not be shown.
  */
 export function openContent(
   state: FrameState,
   contentId: ContentId,
-  axis: SplitAxis = 'row',
+  options: OpenOptions = {},
 ): FrameResult<FrameState> {
   const content = getContent(state.contents, contentId)
   if (content === undefined) {
@@ -593,6 +621,8 @@ export function openContent(
       && node.tabs.some((tabId) => state.layout.tabs[tabId]?.contentId === contentId))
   if (showing !== undefined) return focusFrame(state, showing.id)
 
+  const beside = options.beside ?? state.layout.activePaneId
+  const { axis, direction } = placementSplit(options.place ?? 'right')
   // The new view names the content, not the type: a type is how to draw it, and
   // the content is which one — the distinction the whole registry exists for.
   const makeTab = (id: TabId): TabRecord => ({
@@ -601,7 +631,15 @@ export function openContent(
     contentId: content.id,
     title: content.title,
   })
-  return splitWith(state, state.layout.activePaneId, makeTab, axis)
+  return splitWith(state, beside, makeTab, axis, direction)
+}
+
+/** Where a frame goes when one has to be made for it. */
+export interface OpenOptions {
+  /** Which side of the reference frame it takes; defaults to `right`. */
+  readonly place?: Placement
+  /** The frame it goes beside; defaults to the focused one. */
+  readonly beside?: PaneId
 }
 
 /**
