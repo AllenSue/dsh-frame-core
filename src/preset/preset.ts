@@ -12,6 +12,8 @@
  */
 import type { LayoutState } from '../vendor/ui-dockkit/contract/types.ts'
 import { createIdMinter } from '../vendor/ui-dockkit/engine/initial.ts'
+import type { ContentRegistry } from '../model/content.ts'
+import { registerContent } from '../model/content.ts'
 import { EMPTY_HISTORY } from '../ops/history.ts'
 import { fail, ok, type FrameResult } from '../ops/result.ts'
 import type { FrameState } from '../model/state.ts'
@@ -216,14 +218,36 @@ export function parsePreset(raw: unknown): FrameResult<Preset> {
  * @returns the state holding that layout, with nothing left to undo.
  */
 export function withPreset(state: FrameState, preset: Preset): FrameState {
+  // Adopted through the same canonical form, so the shell's live tree and the
+  // record on disk are the same shape and a re-save writes identical bytes.
+  const layout = canonicalLayout(preset.layout)
   return {
     ...state,
-    // Adopted through the same canonical form, so the shell's live tree and the
-    // record on disk are the same shape and a re-save writes identical bytes.
-    layout: canonicalLayout(preset.layout),
+    layout,
+    // A restored tree's views name contents, and a view with no content behind it
+    // has nothing to draw. A preset carries only the layout, so the contents it
+    // references are taken up from it — and whatever the shell already held is
+    // left alone, because restoring an arrangement is not the same request as
+    // killing everything the arrangement does not mention.
+    contents: adoptContents(state.contents, layout),
     minter: createIdMinter(preset.mint),
     history: EMPTY_HISTORY,
     activePresetId: preset.name,
     revision: state.revision + 1,
   }
+}
+
+/**
+ * Every content a layout's views reference, added to what the shell already has.
+ * @param registry - the registry as it stands.
+ * @param layout - the layout about to be adopted.
+ * @returns the registry with each referenced content present.
+ */
+function adoptContents(registry: ContentRegistry, layout: LayoutState): ContentRegistry {
+  let next = registry
+  for (const tab of Object.values(layout.tabs)) {
+    if (next.has(tab.contentId)) continue
+    next = registerContent(next, { id: tab.contentId, kind: tab.kind, title: tab.title })
+  }
+  return next
 }

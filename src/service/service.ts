@@ -19,10 +19,12 @@ import type { FrameResult } from '../ops/result.ts'
 import { fail, ok } from '../ops/result.ts'
 import { parsePreset, toPreset, withPreset } from '../preset/preset.ts'
 import type { PresetPort } from '../preset/preset.ts'
+import type { ContentId, FrameContent } from '../model/content.ts'
+import { contentList, getContent } from '../model/content.ts'
 import type { DropTarget, FocusDirection } from '../ops/intents.ts'
 import {
-  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, moveFocus, placeFloat, placeTab, resizeSplit,
-  splitFrame,
+  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, openContent,
+  placeFloat, placeTab, registerFrame, resizeSplit, splitFrame,
 } from '../ops/intents.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { project } from '../project/project.ts'
@@ -85,6 +87,17 @@ export interface FramesService {
   activeTypeId(): string | undefined
   /** Whether a frame of `typeId` is open anywhere. */
   isOpen(typeId: string): boolean
+
+  /** Every content the shell holds, whether or not a frame is showing it. */
+  contents(): readonly FrameContent[]
+  /** One content, or `undefined` when the shell is not holding it. */
+  content(id: ContentId): FrameContent | undefined
+  /** Hold a content without showing it. */
+  registerContent(content: FrameContent): FrameResult<FrameState>
+  /** Show a content, or focus a frame already showing it. */
+  openContent(id: ContentId, axis?: SplitAxis): FrameResult<FrameState>
+  /** Destroy a content outright, whatever is showing it. */
+  forgetContent(id: ContentId): FrameResult<FrameState>
 }
 
 /** Where a fresh shell's first frame comes from. */
@@ -194,6 +207,13 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
 
     activeTypeId: (): string | undefined => activeType(state),
     isOpen: (typeId: string): boolean => holdsType(state, typeId),
+
+    contents: (): readonly FrameContent[] => contentList(state.contents),
+    content: (id: ContentId): FrameContent | undefined => getContent(state.contents, id),
+    registerContent: (content: FrameContent): FrameResult<FrameState> => adopt(registerFrame(state, content)),
+    openContent: (id: ContentId, axis?: SplitAxis): FrameResult<FrameState> =>
+      adopt(openContent(state, id, axis)),
+    forgetContent: (id: ContentId): FrameResult<FrameState> => adopt(forgetFrame(state, id)),
 
     activePresetId: (): string | undefined => state.activePresetId,
     presetNames: (): readonly string[] => presets,

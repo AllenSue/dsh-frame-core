@@ -12,6 +12,7 @@ export type FrameErrorCode =
   | 'frames/too-narrow'
   | 'frames/policy-refused'
   | 'frames/unknown-preset'
+  | 'frames/unknown-content'
   | 'frames/not-measured'
   | 'frames/nothing-to-undo'
   | 'frames/nothing-to-redo'

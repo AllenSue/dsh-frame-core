@@ -12,13 +12,15 @@ import {
   planDropTab, planFloatTab, planPlaceTab, planResizeSplit, planSettle, planSplitPane, planUnfloatPane,
 } from '../vendor/ui-dockkit/engine/planner.ts'
 import type {
-  DockZone, LayoutOp, PaneId, SplitAxis, SplitId, TabId, TabRecord,
+  DockZone, LayoutOp, PaneId, PaneNode, SplitAxis, SplitId, TabId, TabRecord,
 } from '../vendor/ui-dockkit/contract/types.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { clampFloatRect } from '../geometry/rect.ts'
 import { placedPanes } from '../geometry/rects.ts'
 import type { FrameState } from '../model/state.ts'
-import { withLayout } from '../model/state.ts'
+import { withContents, withLayout } from '../model/state.ts'
+import type { ContentId, ContentRegistry, FrameContent } from '../model/content.ts'
+import { forgetContent, getContent, registerContent } from '../model/content.ts'
 import { getType } from '../model/types.ts'
 import { applyOps, canRedo, canUndo, pushIntent, type HistoryEntry } from './history.ts'
 import { fail, ok, type FrameResult } from './result.ts'
@@ -45,7 +47,27 @@ function commit(state: FrameState, ops: readonly LayoutOp[]): FrameResult<FrameS
   const applied = applyOps(state.layout, ops)
   const entry: HistoryEntry = { forward: ops, inverse: applied.inverse }
   const next = withLayout(state, applied.layout)
-  return ok({ ...next, history: pushIntent(state.history, entry) })
+  return ok({ ...next, contents: materialise(state.contents, ops), history: pushIntent(state.history, entry) })
+}
+
+/**
+ * Take up every content the operations seat a view for.
+ *
+ * This is the one place a content enters the registry *by being shown*, and it
+ * is deliberately one-way: nothing here removes one. Closing a view is not
+ * closing its content, and the only thing that ends a content is `forgetFrame`.
+ * @param registry - the registry as it stands.
+ * @param ops - the operations the intent is about to apply.
+ * @returns the registry with every seated tab's content present.
+ */
+function materialise(registry: ContentRegistry, ops: readonly LayoutOp[]): ContentRegistry {
+  let next = registry
+  for (const op of ops) {
+    if (op.type !== 'openTab' && op.type !== 'insertTab') continue
+    if (next.has(op.tab.contentId)) continue
+    next = registerContent(next, { id: op.tab.contentId, kind: op.tab.kind, title: op.tab.title })
+  }
+  return next
 }
 
 /**
@@ -84,7 +106,47 @@ function roomForTwo(rect: NormalizedRect, state: FrameState): boolean {
 }
 
 /**
- * Split a pane along an axis.
+ * Split a pane along an axis, seeding the new half with whatever `makeTab`
+ * builds.
+ *
+ * The governance is the same for every caller — this is the one place the three
+ * limits are applied — and what goes in the new half is the caller's business,
+ * because a frame type and a named content both need to open a view and only
+ * differ in the record they seat.
+ * @param state - the state to change.
+ * @param paneId - the reference pane.
+ * @param makeTab - builds the tab the new pane starts with; omit for an empty pane.
+ * @param axis - `row` puts the new pane to the right, `column` below it.
+ * @returns the next state, or why the split was refused.
+ */
+function splitWith(
+  state: FrameState,
+  paneId: PaneId,
+  makeTab: TabFactory | undefined,
+  axis: SplitAxis,
+): FrameResult<FrameState> {
+  if (!hasGeometry(state)) {
+    return fail('frames/not-measured', 'no renderer has reported its drawable extent yet')
+  }
+  const panes = placedPanes(state.layout)
+  const placed = panes.find((pane) => pane.id === paneId)
+  if (placed === undefined) return fail('frames/unknown-target', `pane "${paneId}" is not drawn`)
+  if (activePolicy(state, paneId).splittable === false) {
+    return fail('frames/policy-refused', `the content of pane "${paneId}" refuses to be split`)
+  }
+  const budget = state.platform?.capabilities.maxDockPanes
+  if (budget !== undefined && panes.length >= budget) {
+    return fail('frames/pane-budget-exhausted', `the docked area allows ${budget} pane(s)`)
+  }
+  if (!roomForTwo(placed.rect, state)) {
+    return fail('frames/too-narrow', `pane "${paneId}" has no room for two halves`)
+  }
+  // The engine keeps its own pane cap, so this budget can only tighten it.
+  return commit(state, planSplitPane(state.layout, state.minter.next, paneId, makeTab, axis))
+}
+
+/**
+ * Split a pane along an axis, seeding the new half with a type.
  * @param state - the state to change.
  * @param paneId - the reference pane; defaults to the focused one.
  * @param seed - frame type the new pane starts with; omit for an empty pane.
@@ -97,29 +159,10 @@ export function splitFrame(
   seed?: string,
   axis: SplitAxis = 'row',
 ): FrameResult<FrameState> {
-  if (!hasGeometry(state)) {
-    return fail('frames/not-measured', 'no renderer has reported its drawable extent yet')
-  }
-  const target = paneId ?? state.layout.activePaneId
-  const panes = placedPanes(state.layout)
-  const placed = panes.find((pane) => pane.id === target)
-  if (placed === undefined) return fail('frames/unknown-target', `pane "${target}" is not drawn`)
-
   if (seed !== undefined && getType(state.types, seed) === undefined) {
     return fail('frames/unknown-type', `type "${seed}" is not registered`)
   }
-  if (activePolicy(state, target).splittable === false) {
-    return fail('frames/policy-refused', `the content of pane "${target}" refuses to be split`)
-  }
-  const budget = state.platform?.capabilities.maxDockPanes
-  if (budget !== undefined && panes.length >= budget) {
-    return fail('frames/pane-budget-exhausted', `the docked area allows ${budget} pane(s)`)
-  }
-  if (!roomForTwo(placed.rect, state)) {
-    return fail('frames/too-narrow', `pane "${target}" has no room for two halves`)
-  }
-  // The engine keeps its own pane cap, so this budget can only tighten it.
-  return commit(state, planSplitPane(state.layout, state.minter.next, target, seedFactory(state, seed), axis))
+  return splitWith(state, paneId ?? state.layout.activePaneId, seedFactory(state, seed), axis)
 }
 
 /**
@@ -486,6 +529,79 @@ export function placeFloat(
     ? { type: 'moveFloat', paneId, x: next.x, y: next.y }
     : { type: 'resizeFloat', paneId, rect: next }
   return commit(state, [op])
+}
+
+/**
+ * Register a content without showing it.
+ *
+ * A content that is never registered can still enter the registry by being
+ * shown; registering it first is what lets it exist with no view at all, which
+ * is how a shell opens onto a layout that does not include everything it holds.
+ * @param state - the state to change.
+ * @param content - the content to hold.
+ * @returns the next state; it is not a layout change and records no history.
+ */
+export function registerFrame(state: FrameState, content: FrameContent): FrameResult<FrameState> {
+  if (content.id === '') return fail('frames/unknown-content', 'a content needs an id')
+  if (content.kind === '') return fail('frames/unknown-content', `content "${content.id}" needs a kind`)
+  if (getContent(state.contents, content.id) !== undefined) return ok(state)
+  return ok(withContents(state, registerContent(state.contents, content)))
+}
+
+/**
+ * Destroy a content outright, whatever is showing it.
+ *
+ * The one intent that ends a content. It touches no view — a frame left showing
+ * a forgotten content draws its own "gone" state — so a caller that means "make
+ * this disappear" closes the views first.
+ *
+ * It records no history: the history is a sequence of *layout* operations, and
+ * this is not one. Undoing a layout change cannot bring a content back.
+ * @param state - the state to change.
+ * @param id - the content to end.
+ * @returns the next state; forgetting a content that is not held changes nothing.
+ */
+export function forgetFrame(state: FrameState, id: ContentId): FrameResult<FrameState> {
+  if (getContent(state.contents, id) === undefined) return ok(state)
+  return ok(withContents(state, forgetContent(state.contents, id)))
+}
+
+/**
+ * Show a content, or bring a frame already showing it into focus.
+ *
+ * This is `switch-to-buffer`: the content is the subject, and the frame is
+ * whatever ends up displaying it. A content two frames already show is focused
+ * rather than shown a third time — opening another view of it is a different
+ * request, and a deliberate one.
+ * @param state - the state to change.
+ * @param contentId - the content to show; it must be registered.
+ * @param axis - which way a new half runs when one has to be made.
+ * @returns the next state, or why the content could not be shown.
+ */
+export function openContent(
+  state: FrameState,
+  contentId: ContentId,
+  axis: SplitAxis = 'row',
+): FrameResult<FrameState> {
+  const content = getContent(state.contents, contentId)
+  if (content === undefined) {
+    return fail('frames/unknown-content', `no content "${contentId}" is registered`)
+  }
+
+  const showing = Object.values(state.layout.nodes)
+    .find((node): node is PaneNode => node.kind === 'pane'
+      && node.tabs.some((tabId) => state.layout.tabs[tabId]?.contentId === contentId))
+  if (showing !== undefined) return focusFrame(state, showing.id)
+
+  // The new view names the content, not the type: a type is how to draw it, and
+  // the content is which one — the distinction the whole registry exists for.
+  const makeTab = (id: TabId): TabRecord => ({
+    id,
+    kind: content.kind,
+    contentId: content.id,
+    title: content.title,
+  })
+  return splitWith(state, state.layout.activePaneId, makeTab, axis)
 }
 
 /**

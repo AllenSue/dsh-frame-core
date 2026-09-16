@@ -18,7 +18,14 @@ export {
 } from './model/types.ts'
 
 export type { FrameMeasurements, FrameState, FrameStateOptions } from './model/state.ts'
-export { createFrameState, withLayout, withMeasurements, withPlatform } from './model/state.ts'
+export {
+  createFrameState, withContents, withLayout, withMeasurements, withPlatform,
+} from './model/state.ts'
+
+export type { ContentId, ContentRegistry, FrameContent } from './model/content.ts'
+export {
+  contentList, EMPTY_CONTENTS, forgetContent, getContent, registerContent,
+} from './model/content.ts'
 
 export type { Extent, NormalizedRect } from './geometry/rect.ts'
 export {
@@ -44,8 +51,8 @@ export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/his
 
 export type { DropTarget, FocusDirection } from './ops/intents.ts'
 export {
-  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, moveFocus, neighbour, placeFloat, placeTab,
-  redo, resizeSplit, splitFrame, undo,
+  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, neighbour,
+  openContent, placeFloat, placeTab, redo, registerFrame, resizeSplit, splitFrame, undo,
 } from './ops/intents.ts'
 
 export type {

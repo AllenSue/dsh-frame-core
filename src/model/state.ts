@@ -4,6 +4,7 @@
 import { createIdMinter, createInitialState, type IdMinter } from '../vendor/ui-dockkit/engine/initial.ts'
 import type { LayoutState, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
 import type { Extent } from '../geometry/rect.ts'
+import { EMPTY_CONTENTS, registerContent, type ContentRegistry } from './content.ts'
 import { EMPTY_HISTORY, type FrameHistory } from '../ops/history.ts'
 import type { FramePlatform } from './platform.ts'
 import { EMPTY_REGISTRY, registerType, type FrameTypeRegistry } from './types.ts'
@@ -23,6 +24,13 @@ export interface FrameMeasurements {
  */
 export interface FrameState {
   readonly layout: LayoutState
+  /**
+   * What there is to display, as opposed to where it is displayed.
+   *
+   * A view lives in `layout.tabs`; the content it shows lives here and outlives
+   * it. Closing the last frame onto a content leaves the content alone.
+   */
+  readonly contents: ContentRegistry
   readonly types: FrameTypeRegistry
   readonly platform: FramePlatform | undefined
   readonly measurements: FrameMeasurements | undefined
@@ -68,9 +76,26 @@ export function createFrameState(options: FrameStateOptions): FrameState {
     contentId: options.startup.id,
     title: options.startup.title(),
   })
+  // The factory is the only place the seeded tab's record exists, so it is
+  // captured on the way past rather than minted twice.
+  let startupTab: TabRecord | undefined
+  const layout = createInitialState(minter, (id) => {
+    startupTab = makeStartupTab(id)
+    return startupTab
+  })
 
   return {
-    layout: { ...createInitialState(minter, makeStartupTab), expanded: true },
+    layout: { ...layout, expanded: true },
+    // The seeded frame is not placed by any operation, so its content goes into
+    // the registry here — otherwise the very first content would be the one
+    // content the shell could lose track of.
+    contents: startupTab === undefined
+      ? EMPTY_CONTENTS
+      : registerContent(EMPTY_CONTENTS, {
+        id: startupTab.contentId,
+        kind: startupTab.kind,
+        title: startupTab.title,
+      }),
     types,
     platform: options.platform,
     measurements: undefined,
@@ -79,6 +104,15 @@ export function createFrameState(options: FrameStateOptions): FrameState {
     revision: 0,
     minter,
   }
+}
+
+/**
+ * A state with the content registry replaced and `revision` advanced.
+ * @param state - the state to derive from.
+ * @param contents - the next registry.
+ */
+export function withContents(state: FrameState, contents: ContentRegistry): FrameState {
+  return { ...state, contents, revision: state.revision + 1 }
 }
 
 /**
