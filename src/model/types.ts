@@ -6,6 +6,7 @@
  * for a frame on the left with a size; the core never learns the word sidebar.
  */
 import type { PaneHost } from '../vendor/ui-dockkit/contract/types.ts'
+import type { FrameContent } from './content.ts'
 
 /** Bounds a frame type puts on the operations the core accepts. */
 export interface FrameTypePolicy {
@@ -36,6 +37,18 @@ export interface FrameTypeDefinition {
   readonly hosts?: readonly PaneHost[]
   /** Operation limits. */
   readonly policy?: FrameTypePolicy
+  /**
+   * Make one new instance of this type, or omit to declare it uninstantiable.
+   *
+   * A picker lists the types that answer this, so its absence is the whole
+   * "cannot be created" declaration — one place to look rather than a flag that
+   * could disagree with a factory.
+   *
+   * The factory names what it makes. The core mints ids for panes, splits and
+   * tabs, but a content's identity is the owner's: an editor instance is a
+   * *file*, and a core-made `content7` would split that knowledge in half.
+   */
+  readonly create?: () => FrameContent
 }
 
 /** Why a registration or a lookup failed. */

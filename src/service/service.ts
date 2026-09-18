@@ -23,8 +23,9 @@ import type { ContentId, FrameContent } from '../model/content.ts'
 import { contentList, getContent } from '../model/content.ts'
 import type { DropTarget, FocusDirection, OpenOptions } from '../ops/intents.ts'
 import {
-  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, moveFocus, openContent,
-  placeFloat, placeTab, registerFrame, resizePane, resizeSplit, splitFrame,
+  closeFrame, createContent, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, kindOfPane,
+  moveFocus, openContent, placeFloat, placeTab, registerFrame, resizePane, resizeSplit, showContent,
+  splitFrame,
 } from '../ops/intents.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { project } from '../project/project.ts'
@@ -100,6 +101,12 @@ export interface FramesService {
   registerContent(content: FrameContent): FrameResult<FrameState>
   /** Show a content, or focus a frame already showing it. */
   openContent(id: ContentId, options?: OpenOptions): FrameResult<FrameState>
+  /** Make one new instance of `typeId` and show it in a pane. */
+  createContent(typeId: string, paneId?: PaneId): FrameResult<FrameState>
+  /** Show an existing content in a named pane, or focus it when already there. */
+  showContent(paneId: PaneId, contentId: ContentId): FrameResult<FrameState>
+  /** The kind a pane's contents share, or `undefined` when it holds none. */
+  paneKind(paneId: PaneId): string | undefined
   /** Destroy a content outright, whatever is showing it. */
   forgetContent(id: ContentId): FrameResult<FrameState>
 }
@@ -220,6 +227,11 @@ export function createFramesService(options: FramesServiceOptions): FramesServic
     registerContent: (content: FrameContent): FrameResult<FrameState> => adopt(registerFrame(state, content)),
     openContent: (id: ContentId, options?: OpenOptions): FrameResult<FrameState> =>
       adopt(openContent(state, id, options)),
+    createContent: (typeId: string, paneId?: PaneId): FrameResult<FrameState> =>
+      adopt(createContent(state, typeId, paneId)),
+    showContent: (paneId: PaneId, contentId: ContentId): FrameResult<FrameState> =>
+      adopt(showContent(state, paneId, contentId)),
+    paneKind: (paneId: PaneId): string | undefined => kindOfPane(state, paneId),
     forgetContent: (id: ContentId): FrameResult<FrameState> => adopt(forgetFrame(state, id)),
 
     activePresetId: (): string | undefined => state.activePresetId,

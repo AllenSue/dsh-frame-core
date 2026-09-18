@@ -51,14 +51,14 @@ export { applyOps, canRedo, canUndo, EMPTY_HISTORY, pushIntent } from './ops/his
 
 export type { DropTarget, FocusDirection, OpenOptions, Placement } from './ops/intents.ts'
 export {
-  closeFrame, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, MIN_RESIZE_FRACTION,
-  moveFocus, neighbour, openContent, placeFloat, placeTab, placementSplit, redo, registerFrame,
-  resizePane, resizeSplit, splitFrame, undo,
+  closeFrame, createContent, dockFrame, dropFrame, floatFrame, focusFrame, forgetFrame, kindOfPane,
+  MIN_RESIZE_FRACTION, moveFocus, neighbour, openContent, placeFloat, placeTab, placementSplit, redo,
+  registerFrame, resizePane, resizeSplit, showContent, splitFrame, undo,
 } from './ops/intents.ts'
 
 export type {
   Degradation, FrameBodyProps, FrameViewProjection, ProjectedDivider, ProjectedFloat,
-  ProjectedPane, ProjectedTab, SplitBlock,
+  ProjectedPane, ProjectedTab, ProjectedType, SplitBlock,
 } from './project/project.ts'
 // The projection's own name for how a float is presented; the capability type
 // above shares the word, so it is re-exported under a distinct one.

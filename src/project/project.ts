@@ -88,6 +88,20 @@ export interface FrameBodyProps {
   readonly focused: boolean
 }
 
+/** One frame type, as a picker would list it. */
+export interface ProjectedType {
+  readonly id: string
+  readonly title: string
+  /**
+   * Whether a new instance can be made from it.
+   *
+   * A picker lists only these: a type that declares no factory is one the shell
+   * can display but not bring into being, and offering it would be an invitation
+   * to a refusal.
+   */
+  readonly instantiable: boolean
+}
+
 /** Everything a renderer needs for one frame of output. */
 export interface FrameViewProjection {
   readonly revision: number
@@ -103,6 +117,14 @@ export interface FrameViewProjection {
    * asks for.
    */
   readonly viewport: Extent | undefined
+  /**
+   * Every registered type, in registration order.
+   *
+   * An empty frame draws this as its content picker — the list of things a
+   * person can make here. The core lists what is registered and says which of
+   * them can be instantiated; it does not decide what belongs in the list.
+   */
+  readonly types: readonly ProjectedType[]
   readonly docked: readonly ProjectedPane[]
   /** Floating frames, bottom to top. */
   readonly floats: readonly ProjectedFloat[]
@@ -281,6 +303,13 @@ export function project(state: FrameState): FrameViewProjection {
     revision: state.revision,
     platform: state.platform?.id ?? 'unattached',
     viewport: state.measurements?.viewport,
+    // Read from the registry rather than kept: a plugin registering late is
+    // reflected on the next projection without anything having to be told.
+    types: [...state.types.byId.values()].map((definition) => ({
+      id: definition.id,
+      title: definition.title(),
+      instantiable: definition.create !== undefined,
+    })),
     docked: walk.docked,
     floats: walk.floats,
     dividers: walk.dividers,

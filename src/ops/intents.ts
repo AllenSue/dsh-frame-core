@@ -22,6 +22,7 @@ import { withContents, withLayout } from '../model/state.ts'
 import type { ContentId, ContentRegistry, FrameContent } from '../model/content.ts'
 import { forgetContent, getContent, registerContent } from '../model/content.ts'
 import { getType } from '../model/types.ts'
+import type { FrameTypeDefinition } from '../model/types.ts'
 import { applyOps, canRedo, canUndo, pushIntent, type HistoryEntry } from './history.ts'
 import { fail, ok, type FrameResult } from './result.ts'
 
@@ -39,6 +40,57 @@ function activeTypeId(state: FrameState, paneId: PaneId): string | undefined {
 function activePolicy(state: FrameState, paneId: PaneId): { closable?: boolean; splittable?: boolean } {
   const typeId = activeTypeId(state, paneId)
   return typeId === undefined ? {} : getType(state.types, typeId)?.policy ?? {}
+}
+
+/**
+ * The kind a pane's contents share, or `undefined` when it holds none.
+ *
+ * **A pane holds one kind and only one.** That is what makes a frame an editor
+ * group rather than a pile: every tab in it is the same sort of thing, so
+ * "switch to the next one" means something a person can predict. An empty pane
+ * has no kind yet and takes the kind of whatever is seated in it first.
+ * @param state - the state to read.
+ * @param paneId - the pane to ask.
+ * @returns the shared kind, or `undefined` for an empty pane.
+ */
+export function kindOfPane(state: FrameState, paneId: PaneId): string | undefined {
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane') return undefined
+  const first = node.tabs[0]
+  return first === undefined ? undefined : state.layout.tabs[first]?.kind
+}
+
+/** Whether `kind` may join a pane, and why not when it may not. */
+function kindConflict(state: FrameState, paneId: PaneId, kind: string): FrameResult<FrameState> | undefined {
+  const held = kindOfPane(state, paneId)
+  if (held === undefined || held === kind) return undefined
+  return fail('frames/kind-mismatch', `pane "${paneId}" holds "${held}"; a "${kind}" cannot share it`)
+}
+
+/** How many contents of `kind` the shell is holding. */
+function instancesOfKind(state: FrameState, kind: string): number {
+  return [...state.contents.values()].filter((content) => content.kind === kind).length
+}
+
+/**
+ * Whether a type's own limits allow one more instance.
+ * @param state - the state to read.
+ * @param definition - the declaring type.
+ * @returns `undefined` when one more is allowed, else the refusal.
+ */
+function withinInstanceLimit(
+  state: FrameState,
+  definition: FrameTypeDefinition,
+): FrameResult<FrameState> | undefined {
+  const existing = instancesOfKind(state, definition.id)
+  if (definition.singleton === true && existing > 0) {
+    return fail('frames/instance-limit', `only one "${definition.id}" may exist`)
+  }
+  const limit = definition.policy?.maxInstances
+  if (limit !== undefined && existing >= limit) {
+    return fail('frames/instance-limit', `at most ${limit} "${definition.id}" may exist`)
+  }
+  return undefined
 }
 
 /** Record one accepted intent: apply it, advance the revision, push one entry. */
@@ -438,7 +490,8 @@ export function dropFrame(
   if (node === undefined || node.kind !== 'pane' || node.host !== 'dock') {
     return fail('frames/unknown-target', `pane "${paneId}" is not a docked pane`)
   }
-  if (zoneSplit(target.zone) !== undefined) {
+  const split = zoneSplit(target.zone)
+  if (split !== undefined) {
     // An edge release is a split, so it answers to the same three limits a
     // keyboard split does — and refuses in the same words.
     const panes = placedPanes(state.layout)
@@ -458,6 +511,15 @@ export function dropFrame(
     }
     if (!roomForTwo(placed.rect, state)) {
       return fail('frames/too-narrow', `pane "${paneId}" has no room for two halves`)
+    }
+  } else {
+    // A centre release seats the frame among the pane's other tabs, so every tab
+    // there has to be the same sort of thing. An edge release makes a new pane
+    // and takes its kind with it, which is why it is exempt.
+    const kind = state.layout.tabs[tabId]?.kind
+    if (kind !== undefined) {
+      const conflict = kindConflict(state, paneId, kind)
+      if (conflict !== undefined) return conflict
     }
   }
 
@@ -632,6 +694,100 @@ export function openContent(
     title: content.title,
   })
   return splitWith(state, beside, makeTab, axis, direction)
+}
+
+/**
+ * Make one new instance of a type and show it in a pane.
+ *
+ * This is what a picker does when the user chooses a type, and what a "new
+ * editor" command does afterwards: the type's own factory says what the
+ * instance *is*, the core registers it and seats it as the pane's next tab.
+ *
+ * Everything the core checks is the type's own declaration — that it is
+ * instantiable, that it is within its instance limit, and that it agrees with
+ * the kind the pane already holds.
+ * @param state - the state to change.
+ * @param typeId - the type to instantiate.
+ * @param paneId - the pane to show it in; defaults to the focused one.
+ * @returns the next state, or why it was refused.
+ */
+export function createContent(
+  state: FrameState,
+  typeId: string,
+  paneId?: PaneId,
+): FrameResult<FrameState> {
+  const definition = getType(state.types, typeId)
+  if (definition === undefined) return fail('frames/unknown-type', `type "${typeId}" is not registered`)
+  if (definition.create === undefined) {
+    return fail('frames/unknown-type', `type "${typeId}" cannot be instantiated`)
+  }
+  const target = paneId ?? state.layout.activePaneId
+  const node = state.layout.nodes[target]
+  if (node === undefined || node.kind !== 'pane') {
+    return fail('frames/unknown-target', `pane "${target}" does not exist`)
+  }
+
+  const conflict = kindConflict(state, target, typeId)
+  if (conflict !== undefined) return conflict
+  const limit = withinInstanceLimit(state, definition)
+  if (limit !== undefined) return limit
+
+  // The factory runs before anything is committed, so a plugin that throws
+  // leaves the tree untouched rather than half-changed.
+  const content = definition.create()
+  const record: TabRecord = {
+    id: state.minter.next('tab'),
+    kind: content.kind,
+    contentId: content.id,
+    title: content.title,
+  }
+  // Registered first, then seated: the seat's `materialise` would take it up
+  // anyway, but a content the shell holds is what makes it switchable back to.
+  const registered = registerFrame(state, content)
+  if (!registered.ok) return registered
+  return commit(registered.value, [
+    { type: 'openTab', paneId: target, tab: record, index: node.tabs.length },
+  ])
+}
+
+/**
+ * Show an existing content in a pane, or focus it if the pane already holds it.
+ *
+ * The counterpart to `openContent`, which is `switch-to-buffer` without saying
+ * where: this one names the frame, because "show this here" is a different
+ * request from "show this somewhere". Nothing is destroyed either way — a
+ * content switched away from keeps its tab, so switching back is one step.
+ * @param state - the state to change.
+ * @param paneId - the pane to show it in.
+ * @param contentId - the content to show; it must be registered.
+ * @returns the next state, or why it was refused.
+ */
+export function showContent(
+  state: FrameState,
+  paneId: PaneId,
+  contentId: ContentId,
+): FrameResult<FrameState> {
+  const content = getContent(state.contents, contentId)
+  if (content === undefined) {
+    return fail('frames/unknown-content', `no content "${contentId}" is registered`)
+  }
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane') {
+    return fail('frames/unknown-target', `pane "${paneId}" does not exist`)
+  }
+
+  // Already a tab here: this is a switch, not a re-open.
+  const held = node.tabs.find((tabId) => state.layout.tabs[tabId]?.contentId === contentId)
+  if (held !== undefined) return commit(state, [{ type: 'focusTab', tabId: held }])
+
+  const conflict = kindConflict(state, paneId, content.kind)
+  if (conflict !== undefined) return conflict
+  return commit(state, [{
+    type: 'openTab',
+    paneId,
+    tab: { id: state.minter.next('tab'), kind: content.kind, contentId: content.id, title: content.title },
+    index: node.tabs.length,
+  }])
 }
 
 /** Where a frame goes when one has to be made for it. */

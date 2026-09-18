@@ -13,6 +13,8 @@ export type FrameErrorCode =
   | 'frames/policy-refused'
   | 'frames/unknown-preset'
   | 'frames/unknown-content'
+  | 'frames/kind-mismatch'
+  | 'frames/instance-limit'
   | 'frames/not-measured'
   | 'frames/nothing-to-undo'
   | 'frames/nothing-to-redo'

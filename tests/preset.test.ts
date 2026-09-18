@@ -56,6 +56,9 @@ function furnished(): FrameState {
 /** A service over the same options, with both types registered and measured. */
 function service(extra: Partial<FramesServiceOptions> = {}): FramesService {
   const built = createFramesService({ startup: CONVERSATION, platform: PLATFORM, ...extra })
+  // Both, not just the second: the startup type seeds the first frame but is not
+  // registered on its behalf, so a split that names it needs this too.
+  built.registerType(CONVERSATION)
   built.registerType(NOTES)
   built.reportMeasurements(VIEWPORT)
   return built
@@ -383,9 +386,11 @@ test('a float keeps its rectangle across a save and load', async () => {
   assert.deepEqual(frames.project().floats[0]?.rect, { x: 0.2, y: 0.3, width: 0.25, height: 0.35 })
 })
 
-test('two chips stacked in one pane survive a round trip', async () => {
+test('two tabs of one kind in a pane survive a round trip', async () => {
   const frames = service({ presets: medium().port })
-  frames.split(undefined, 'notes')
+  // Same kind throughout: a pane holds one kind only, so stacking needs both
+  // panes to be the same sort of thing.
+  frames.split(undefined, 'conversation')
   const panes = frames.project().docked
   const left = panes[0]?.id as PaneId
   const right = panes[1]?.id as PaneId
@@ -395,7 +400,7 @@ test('two chips stacked in one pane survive a round trip', async () => {
   assert.equal(stacked.docked[0]?.tabs.length, 2, 'the fixture actually stacked two chips')
   await frames.savePreset('stacked')
 
-  frames.split(undefined, 'notes')
+  frames.split(undefined, 'conversation')
   await frames.applyPreset('stacked')
 
   assert.deepEqual(frames.project().docked, stacked.docked)

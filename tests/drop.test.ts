@@ -78,7 +78,10 @@ test('an edge release splits the target and seats the frame in the new half', ()
 })
 
 test('dragging the only frame out of a pane merges that pane away in the same step', () => {
-  const two = accepted(splitFrame(ready(), undefined, 'notes'))
+  // Both panes hold the same kind: a centre release seats the frame among the
+  // target's tabs, and a pane holds one kind only. What this test is about is
+  // the emptied pane, not the kind, so the fixture stays within one.
+  const two = accepted(splitFrame(ready(), undefined, 'conversation'))
   const left = paneAt(two, 'first')
   const right = paneAt(two, 'last')
   const source = two.layout.nodes[left]
@@ -90,6 +93,29 @@ test('dragging the only frame out of a pane merges that pane away in the same st
 
   assert.equal(placedPanes(next.layout).length, 1)
   assert.equal(next.history.past.length, 2)
+})
+
+test('a release that would mix kinds in one pane is refused', () => {
+  // The rule the fixture above respects. A centre release stacks the frame among
+  // the target's tabs, and a pane holds one kind only.
+  const two = accepted(splitFrame(ready(), undefined, 'notes'))
+  const left = paneAt(two, 'first')
+  const right = paneAt(two, 'last')
+  const source = two.layout.nodes[left]
+  const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
+
+  const refused = dropFrame(two, dragged, { kind: 'dock', paneId: right, zone: 'center' })
+
+  assert.equal(refused.ok, false)
+  assert.equal(refused.ok === false ? refused.code : '', 'frames/kind-mismatch')
+
+  // An *edge* release is exempt, and rightly so: it makes a new pane, and the
+  // frame takes its kind in with it.
+  assert.equal(
+    dropFrame(two, dragged, { kind: 'dock', paneId: right, zone: 'right' }, 'conversation').ok,
+    true,
+  )
+  assert.equal(two.history.past.length, 1, 'a refusal records nothing')
 })
 
 test('a drop over nothing takes the frame out into a window', () => {
@@ -242,7 +268,9 @@ test('a floating rectangle is kept inside the area and above the size floor', ()
 })
 
 test('a chip moves to another caret slot in the strip it is already in', () => {
-  const two = accepted(splitFrame(ready(), undefined, 'notes'))
+  // One kind throughout: what is being tested is the caret slot, and a pane
+  // holds one kind only.
+  const two = accepted(splitFrame(ready(), undefined, 'conversation'))
   const left = paneAt(two, 'first')
   const right = paneAt(two, 'last')
   const source = two.layout.nodes[right]
@@ -253,15 +281,13 @@ test('a chip moves to another caret slot in the strip it is already in', () => {
   const node = stacked.layout.nodes[left]
   assert.equal(node?.kind, 'pane')
   const before = (node?.kind === 'pane' ? node.tabs : []).map((tabId) => stacked.layout.tabs[tabId]?.kind)
-  assert.deepEqual(before, ['conversation', 'notes'])
+  assert.deepEqual(before, ['conversation', 'conversation'])
 
   const first = (node?.kind === 'pane' ? node.tabs[0] : undefined) as TabId
   const next = accepted(placeTab(stacked, first, left, 2))
   const after = next.layout.nodes[left]
-  assert.deepEqual(
-    (after?.kind === 'pane' ? after.tabs : []).map((tabId) => next.layout.tabs[tabId]?.kind),
-    ['notes', 'conversation'],
-  )
+  const order = (after?.kind === 'pane' ? after.tabs : [])
+  assert.equal(order[0], node?.kind === 'pane' ? node.tabs[1] : undefined, 'the two swapped places')
 })
 
 test('a chip cannot be placed into a strip it is not in; that is a drop', () => {
