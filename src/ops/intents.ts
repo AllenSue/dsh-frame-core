@@ -12,7 +12,8 @@ import {
   planDropTab, planFloatTab, planPlaceTab, planResizeSplit, planSettle, planSplitPane, planUnfloatPane,
 } from '../vendor/ui-dockkit/engine/planner.ts'
 import type {
-  DockZone, LayoutOp, PaneId, PaneNode, SplitAxis, SplitDirection, SplitId, TabId, TabRecord,
+  DockZone, LayoutOp, LayoutState, NodeId, PaneId, PaneNode, SplitAxis, SplitDirection, SplitId, TabId,
+  TabRecord,
 } from '../vendor/ui-dockkit/contract/types.ts'
 import type { NormalizedRect } from '../geometry/rect.ts'
 import { clampFloatRect } from '../geometry/rect.ts'
@@ -93,13 +94,82 @@ function withinInstanceLimit(
   return undefined
 }
 
+/** Whether a pane's content wants a share of the space freed beside it. */
+function growsIn(state: FrameState, paneId: PaneId): boolean {
+  const kind = kindOfPane(state, paneId)
+  if (kind === undefined) return true
+  return getType(state.types, kind)?.policy?.grows !== false
+}
+
+/**
+ * Give back the shares a collapse should not have taken.
+ *
+ * Collapsing a split renormalises what is left, so every survivor takes a
+ * proportional bite of the space that opened up. That is right for content that
+ * can use the room and wrong for a column told to stay put: a 280px navigation
+ * rail becomes 350px because the frame beside it closed.
+ *
+ * So the survivors are put back where they were and the freed share is handed
+ * only to those that grow. With nobody to take it — every survivor fixed — the
+ * proportional result stands, because the row still has to add up.
+ * @param before - the layout the intent started from.
+ * @param after - the layout the operations produced.
+ * @param grows - whether a child absorbs freed space.
+ * @returns the resize operations that undo the renormalisation.
+ */
+function settledSizes(
+  before: LayoutState,
+  after: LayoutState,
+  grows: (childId: NodeId) => boolean,
+): readonly LayoutOp[] {
+  const ops: LayoutOp[] = []
+  for (const node of Object.values(after.nodes)) {
+    if (node.kind !== 'split') continue
+    const was = before.nodes[node.id]
+    if (was === undefined || was.kind !== 'split') continue
+    if (node.children.length >= was.children.length) continue
+
+    const share = new Map(was.children.map((childId, at) => [childId, was.sizes[at] ?? 0]))
+    const kept = node.children
+    const held = kept.reduce((sum, childId) => sum + (share.get(childId) ?? 0), 0)
+    const freed = 1 - held
+    const takers = kept.filter((childId) => grows(childId))
+    const takerTotal = takers.reduce((sum, childId) => sum + (share.get(childId) ?? 0), 0)
+
+    const sizes = kept.map((childId) => {
+      const own = share.get(childId) ?? 0
+      if (freed <= 1e-9 || takers.length === 0 || !takers.includes(childId)) return own
+      // A taker with nothing to be proportional to still has to take something,
+      // or the row would not add up.
+      return takerTotal > 0 ? own + freed * (own / takerTotal) : own + freed / takers.length
+    })
+    ops.push({ type: 'resize', splitId: node.id, sizes: clampSizes(sizes, MIN_RESIZE_FRACTION) })
+  }
+  return ops
+}
+
 /** Record one accepted intent: apply it, advance the revision, push one entry. */
 function commit(state: FrameState, ops: readonly LayoutOp[]): FrameResult<FrameState> {
   if (ops.length === 0) return fail('frames/unknown-target', 'the intent produced no operation')
-  const applied = applyOps(state.layout, ops)
-  const entry: HistoryEntry = { forward: ops, inverse: applied.inverse }
+  const planned = applyOps(state.layout, ops)
+  // A collapse renormalises what survives; anything that asked to stay put gets
+  // its share back, in the same history entry as the collapse itself.
+  const sized = settledSizes(
+    state.layout,
+    planned.layout,
+    // A nested split has no content of its own, so nothing can ask it to stay
+    // put: it grows, and whatever is inside it decides for itself.
+    (childId) => state.layout.nodes[childId]?.kind !== 'pane' || growsIn(state, childId as PaneId),
+  )
+  const forward = sized.length === 0 ? ops : [...ops, ...sized]
+  const applied = sized.length === 0 ? planned : applyOps(state.layout, forward)
+  const entry: HistoryEntry = { forward, inverse: applied.inverse }
   const next = withLayout(state, applied.layout)
-  return ok({ ...next, contents: materialise(state.contents, ops), history: pushIntent(state.history, entry) })
+  return ok({
+    ...next,
+    contents: materialise(state.contents, forward),
+    history: pushIntent(state.history, entry),
+  })
 }
 
 /**

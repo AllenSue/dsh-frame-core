@@ -18,6 +18,15 @@ export interface FrameTypePolicy {
   readonly preemptible?: boolean
   /** Instances allowed at once. */
   readonly maxInstances?: number
+  /**
+   * Whether this content absorbs space a departing sibling frees. Defaults to true.
+   *
+   * A navigation column sets this false. When the frame beside it closes, the
+   * space it leaves has to go somewhere, and without a preference every survivor
+   * takes a proportional share of it — so a fixed rail quietly grows while the
+   * column that should have taken the room gets only part of it.
+   */
+  readonly grows?: boolean
 }
 
 /**
