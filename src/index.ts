@@ -57,8 +57,8 @@ export {
 } from './ops/intents.ts'
 
 export type {
-  Degradation, FrameBodyProps, FrameViewProjection, ProjectedDivider, ProjectedFloat,
-  ProjectedPane, ProjectedTab, ProjectedType, SplitBlock,
+  Degradation, FrameBodyProps, FrameViewProjection, ProjectedContent, ProjectedDivider,
+  ProjectedFloat, ProjectedPane, ProjectedTab, ProjectedType, SplitBlock,
 } from './project/project.ts'
 // The projection's own name for how a float is presented; the capability type
 // above shares the word, so it is re-exported under a distinct one.

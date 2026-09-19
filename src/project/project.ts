@@ -88,6 +88,19 @@ export interface FrameBodyProps {
   readonly focused: boolean
 }
 
+/**
+ * One content the shell is holding, as a picker or a switch would list it.
+ *
+ * A content is a thing that exists; a type is a thing that could. A picker shows
+ * both, because "show me that one" and "make me one" are the same question asked
+ * about two inventories.
+ */
+export interface ProjectedContent {
+  readonly id: string
+  readonly kind: string
+  readonly title: string
+}
+
 /** One frame type, as a picker would list it. */
 export interface ProjectedType {
   readonly id: string
@@ -95,9 +108,9 @@ export interface ProjectedType {
   /**
    * Whether a new instance can be made from it.
    *
-   * A picker lists only these: a type that declares no factory is one the shell
-   * can display but not bring into being, and offering it would be an invitation
-   * to a refusal.
+   * A picker offers only these under "new": a type that declares no factory is
+   * one the shell can display but not bring into being, and offering it would be
+   * an invitation to a refusal.
    */
   readonly instantiable: boolean
 }
@@ -125,6 +138,14 @@ export interface FrameViewProjection {
    * them can be instantiated; it does not decide what belongs in the list.
    */
   readonly types: readonly ProjectedType[]
+  /**
+   * Every content the shell holds, in id order.
+   *
+   * The other half of a picker: what already exists and can simply be shown. A
+   * content with no frame on it is still here — that is the whole point of
+   * holding contents apart from the frames that display them.
+   */
+  readonly contents: readonly ProjectedContent[]
   readonly docked: readonly ProjectedPane[]
   /** Floating frames, bottom to top. */
   readonly floats: readonly ProjectedFloat[]
@@ -310,6 +331,9 @@ export function project(state: FrameState): FrameViewProjection {
       title: definition.title(),
       instantiable: definition.create !== undefined,
     })),
+    contents: [...state.contents.values()]
+      .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+      .map((content) => ({ id: content.id, kind: content.kind, title: content.title })),
     docked: walk.docked,
     floats: walk.floats,
     dividers: walk.dividers,

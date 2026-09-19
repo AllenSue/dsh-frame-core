@@ -224,6 +224,25 @@ test('the projection lists every type and says which can be instantiated', () =>
   ])
 })
 
+test('the projection lists every content the shell holds', () => {
+  const editor = editorType()
+  const state = emptyPane([CONVERSATION, editor.definition])
+  const pane = placedPanes(state.layout)[1]?.id as PaneId
+
+  // A fresh shell holds the content its first frame was seeded with, even though
+  // the pane doing the asking is a different one.
+  assert.deepEqual(project(state).contents, [
+    { id: 'conversation', kind: 'conversation', title: 'Conversation' },
+  ])
+
+  const made = accepted(createContent(state, 'editor', pane))
+  assert.deepEqual(project(made).contents.map((content) => content.id), ['/tmp/file-1.ts', 'conversation'])
+
+  // And one closed away is still listed: that is where it comes back from.
+  const closed = accepted(closeFrame(made, pane))
+  assert.equal(project(closed).contents.length, 2)
+})
+
 test('a type registered after mounting shows up in the list without anything being told', () => {
   const service = createFramesService({ startup: CONVERSATION, platform: PLATFORM })
   service.reportMeasurements(VIEWPORT)
