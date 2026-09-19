@@ -6,10 +6,10 @@
  * it, and an accepted intent becomes exactly one history entry. A refusal returns
  * a result and leaves the state untouched.
  */
-import { canSplit, clampSizes, MAX_DOCK_PANES, zoneSplit } from '../vendor/ui-dockkit/engine/constraints.ts'
+import { clampSizes } from '../vendor/ui-dockkit/engine/constraints.ts'
 import type { TabFactory } from '../vendor/ui-dockkit/engine/initial.ts'
 import {
-  planDropTab, planFloatTab, planPlaceTab, planResizeSplit, planSettle, planSplitPane, planUnfloatPane,
+  planFloatTab, planResizeSplit, planSplitPane, planUnfloatPane,
 } from '../vendor/ui-dockkit/engine/planner.ts'
 import type {
   DockZone, LayoutOp, LayoutState, NodeId, PaneId, PaneNode, SplitAxis, SplitDirection, SplitId, TabId,
@@ -44,15 +44,14 @@ function activePolicy(state: FrameState, paneId: PaneId): { closable?: boolean; 
 }
 
 /**
- * The kind a pane's contents share, or `undefined` when it holds none.
+ * The kind a pane's content is drawn by, or `undefined` when it holds none.
  *
- * **A pane holds one kind and only one.** That is what makes a frame an editor
- * group rather than a pile: every tab in it is the same sort of thing, so
- * "switch to the next one" means something a person can predict. An empty pane
- * has no kind yet and takes the kind of whatever is seated in it first.
+ * A pane holds one content — one kind — so this is simply what is displayed
+ * there. It stays a question worth asking because an empty pane, one waiting for
+ * a choice, has no kind yet.
  * @param state - the state to read.
  * @param paneId - the pane to ask.
- * @returns the shared kind, or `undefined` for an empty pane.
+ * @returns the kind, or `undefined` for an empty pane.
  */
 export function kindOfPane(state: FrameState, paneId: PaneId): string | undefined {
   const node = state.layout.nodes[paneId]
@@ -61,11 +60,40 @@ export function kindOfPane(state: FrameState, paneId: PaneId): string | undefine
   return first === undefined ? undefined : state.layout.tabs[first]?.kind
 }
 
-/** Whether `kind` may join a pane, and why not when it may not. */
-function kindConflict(state: FrameState, paneId: PaneId, kind: string): FrameResult<FrameState> | undefined {
-  const held = kindOfPane(state, paneId)
-  if (held === undefined || held === kind) return undefined
-  return fail('frames/kind-mismatch', `pane "${paneId}" holds "${held}"; a "${kind}" cannot share it`)
+/**
+ * The view a pane is displaying: its one tab, if it has one.
+ *
+ * A frame shows one content. The engine underneath keeps a tab list per pane and
+ * the shell keeps it at exactly one entry — which is also how the engine's own
+ * floating panes work ("capacity 1 tab, drawn without a tab strip"). Everything
+ * above this line talks about contents, never about tabs.
+ * @param state - the state to read.
+ * @param paneId - the pane to ask.
+ * @returns the tab record it displays, or `undefined` for an empty pane.
+ */
+function displayedTab(state: FrameState, paneId: PaneId) {
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane') return undefined
+  const first = node.tabs[0]
+  return first === undefined ? undefined : state.layout.tabs[first]
+}
+
+/**
+ * The operations that put `record` in `paneId` in place of whatever it displays.
+ *
+ * One intent, and one history entry: the old view goes and the new one arrives
+ * together, so stepping back lands on the frame showing what it showed before —
+ * never on an empty frame that briefly existed.
+ * @param state - the state to change.
+ * @param paneId - the pane that changes what it displays.
+ * @param record - the tab record to seat.
+ * @returns the operations, oldest first.
+ */
+function planReplace(state: FrameState, paneId: PaneId, record: TabRecord): readonly LayoutOp[] {
+  const node = state.layout.nodes[paneId]
+  const showing = node === undefined || node.kind !== 'pane' ? undefined : node.tabs[0]
+  const open: LayoutOp = { type: 'openTab', paneId, tab: record, index: 0 }
+  return showing === undefined ? [open] : [{ type: 'closeTab', tabId: showing }, open]
 }
 
 /** How many contents of `kind` the shell is holding. */
@@ -492,28 +520,23 @@ export type DropTarget =
   | { readonly kind: 'dock'; readonly paneId: PaneId; readonly zone: DockZone }
   | { readonly kind: 'float'; readonly rect?: NormalizedRect }
 
-/** The pane holding `tabId`, docked or floating. */
-function paneHolding(state: FrameState, tabId: TabId): PaneId | undefined {
-  for (const node of Object.values(state.layout.nodes)) {
-    if (node.kind === 'pane' && node.tabs.includes(tabId)) return node.id
-  }
-  return undefined
-}
-
 /**
  * Release a dragged frame on a target.
  *
- * This is the one semantic operation every pointer release produces, whatever
- * the pointer did: the geometry lives in the renderer, and the *decision* — move
- * the frame into a pane, split a pane to seat it, or take it out into a window —
- * is made here, once, under the same governance as the keyboard paths. A drop
- * the model cannot carry out is refused and changes nothing.
- * @param state - the state to change.
+ * Retired with the tab strip. A release used to name the *tab* that was dragged,
+ * because the thing a pointer picked up was a chip in a frame's strip — and a
+ * shell that shows one content per frame has no such chip. Moving a content
+ * between frames is now `showContent(paneId, contentId)` (one call, which a
+ * plugin's own tab strip can make just as well as a shell gesture could), and
+ * splitting a frame is the keyboard's `C-x right` / `C-x down`.
+ *
+ * The intent stays in the vocabulary and refuses, rather than disappearing: a
+ * caller that still asks for it deserves to be told why, in the tree's own words.
+ * @param state - the state to change; it is not modified.
  * @param tabId - the tab that was dragged.
  * @param target - what the pointer released on.
- * @param seed - type that backfills a pane the drop would otherwise empty; the
- *   content side names it, exactly as `splitFrame` asks it to.
- * @returns the next state, or why the release was refused.
+ * @param seed - type that backfills a pane the drop would otherwise empty.
+ * @returns the refusal.
  */
 export function dropFrame(
   state: FrameState,
@@ -521,98 +544,27 @@ export function dropFrame(
   target: DropTarget,
   seed?: string,
 ): FrameResult<FrameState> {
-  const sourceId = paneHolding(state, tabId)
-  const source = sourceId === undefined ? undefined : state.layout.nodes[sourceId]
-  if (sourceId === undefined || source === undefined || source.kind !== 'pane') {
-    return fail('frames/unknown-target', `tab "${tabId}" is not drawn anywhere`)
-  }
-  if (seed !== undefined && getType(state.types, seed) === undefined) {
-    return fail('frames/unknown-type', `type "${seed}" is not registered`)
-  }
-  const makeTab = seedFactory(state, seed)
-
-  if (target.kind === 'float') {
-    const capabilities = state.platform?.capabilities
-    if (capabilities === undefined) {
-      return fail('frames/not-measured', 'no renderer has declared its capabilities yet')
-    }
-    if (capabilities.floats === 'none') {
-      return fail('frames/unsupported-on-platform', 'this target cannot draw a floating frame')
-    }
-    // Already the only thing in a window: pulling it out would move nothing.
-    if (source.host === 'float' && source.tabs.length === 1) return ok(state)
-    const definition = getType(state.types, state.layout.tabs[tabId]?.kind ?? '')
-    if (definition?.hosts !== undefined && !definition.hosts.includes('float')) {
-      return fail('frames/policy-refused', `the content of tab "${tabId}" refuses to float`)
-    }
-    const planned = planFloatTab(state.layout, state.minter.next, tabId, target.rect ?? nextFloatRect(state))
-    const ops: LayoutOp[] = [...planned.ops]
-    // A docked pane that is not the root merges away once its last tab leaves,
-    // exactly as it does when that tab is closed or floated by the key map.
-    if (source.host === 'dock' && sourceId !== state.layout.rootId && source.tabs.length === 1) {
-      ops.push({ type: 'merge', paneId: sourceId })
-    }
-    return commit(state, ops)
-  }
-
-  const paneId = target.paneId
-  const node = state.layout.nodes[paneId]
-  if (node === undefined || node.kind !== 'pane' || node.host !== 'dock') {
-    return fail('frames/unknown-target', `pane "${paneId}" is not a docked pane`)
-  }
-  const split = zoneSplit(target.zone)
-  if (split !== undefined) {
-    // An edge release is a split, so it answers to the same three limits a
-    // keyboard split does — and refuses in the same words.
-    const panes = placedPanes(state.layout)
-    const placed = panes.find((pane) => pane.id === paneId)
-    if (placed === undefined) return fail('frames/unknown-target', `pane "${paneId}" is not drawn`)
-    if (activePolicy(state, paneId).splittable === false) {
-      return fail('frames/policy-refused', `the content of pane "${paneId}" refuses to be split`)
-    }
-    const budget = state.platform?.capabilities.maxDockPanes
-    if (budget !== undefined && panes.length >= budget) {
-      return fail('frames/pane-budget-exhausted', `the docked area allows ${budget} pane(s)`)
-    }
-    // The engine keeps its own cap, so a platform that declares none is still
-    // bounded — and says so rather than quietly changing nothing.
-    if (!canSplit(state.layout)) {
-      return fail('frames/pane-budget-exhausted', `the docked area allows ${MAX_DOCK_PANES} pane(s)`)
-    }
-    if (!roomForTwo(placed.rect, state)) {
-      return fail('frames/too-narrow', `pane "${paneId}" has no room for two halves`)
-    }
-  } else {
-    // A centre release seats the frame among the pane's other tabs, so every tab
-    // there has to be the same sort of thing. An edge release makes a new pane
-    // and takes its kind with it, which is why it is exempt.
-    const kind = state.layout.tabs[tabId]?.kind
-    if (kind !== undefined) {
-      const conflict = kindConflict(state, paneId, kind)
-      if (conflict !== undefined) return conflict
-    }
-  }
-
-  const ops = planDropTab(state.layout, state.minter.next, tabId, paneId, target.zone, makeTab)
-  // A release that changes nothing is not a refusal: the frame lands where it
-  // already was, and recording that would be one undo step for no movement.
-  if (ops.length === 0) return ok(state)
-  // Emptying a pane is the drop's *consequence*, not its intent, so the cleanup
-  // rides along in the same history entry rather than becoming its own step.
-  const settled = planSettle(applyOps(state.layout, ops).layout, state.minter.next, makeTab)
-  return commit(state, [...ops, ...settled])
+  void state
+  void tabId
+  void target
+  void seed
+  return fail(
+    'frames/one-content-per-frame',
+    'a frame displays one content; there is no strip to drop a tab into or out of',
+  )
 }
 
 /**
  * Move a chip to another caret slot in the strip it already sits in.
  *
- * Crossing panes is a *drop*, not a placement: a drop carries the frame's host
- * with it and settles the pane it empties, which a slot index cannot express.
- * @param state - the state to change.
+ * Retired with the strip, for the same reason `dropFrame` was: there are no
+ * chips. Reordering what a content shows inside itself is that content's own
+ * business — the plugin draws its own tabs and moves them in its own way.
+ * @param state - the state to change; it is not modified.
  * @param tabId - the tab being moved.
- * @param toPaneId - the strip it lands in; must be the one it is already in.
- * @param index - caret slot counted over the chips as drawn.
- * @returns the next state; a placement that changes nothing is accepted as-is.
+ * @param toPaneId - the strip it lands in.
+ * @param index - the caret slot it lands at.
+ * @returns the refusal.
  */
 export function placeTab(
   state: FrameState,
@@ -620,16 +572,14 @@ export function placeTab(
   toPaneId: PaneId,
   index: number,
 ): FrameResult<FrameState> {
-  const node = state.layout.nodes[toPaneId]
-  if (node === undefined || node.kind !== 'pane' || node.host !== 'dock') {
-    return fail('frames/unknown-target', `pane "${toPaneId}" is not a docked pane`)
-  }
-  if (!node.tabs.includes(tabId)) {
-    return fail('frames/unknown-target', `tab "${tabId}" is not in pane "${toPaneId}"`)
-  }
-  const ops = planPlaceTab(state.layout, tabId, toPaneId, index)
-  if (ops.length === 0) return ok(state)
-  return commit(state, ops)
+  void state
+  void tabId
+  void toPaneId
+  void index
+  return fail(
+    'frames/one-content-per-frame',
+    'a frame displays one content; there is no strip to reorder within',
+  )
 }
 
 /**
@@ -771,11 +721,12 @@ export function openContent(
  *
  * This is what a picker does when the user chooses a type, and what a "new
  * editor" command does afterwards: the type's own factory says what the
- * instance *is*, the core registers it and seats it as the pane's next tab.
+ * instance *is*, and the core registers it and shows it in the pane —
+ * **replacing what that frame was displaying**, the same swap `showContent`
+ * makes. What is replaced is put down rather than destroyed.
  *
- * Everything the core checks is the type's own declaration — that it is
- * instantiable, that it is within its instance limit, and that it agrees with
- * the kind the pane already holds.
+ * Everything the core checks is the type's own declaration: that it is
+ * instantiable, and that it is within its instance limit.
  * @param state - the state to change.
  * @param typeId - the type to instantiate.
  * @param paneId - the pane to show it in; defaults to the focused one.
@@ -797,8 +748,6 @@ export function createContent(
     return fail('frames/unknown-target', `pane "${target}" does not exist`)
   }
 
-  const conflict = kindConflict(state, target, typeId)
-  if (conflict !== undefined) return conflict
   const limit = withinInstanceLimit(state, definition)
   if (limit !== undefined) return limit
 
@@ -815,18 +764,23 @@ export function createContent(
   // anyway, but a content the shell holds is what makes it switchable back to.
   const registered = registerFrame(state, content)
   if (!registered.ok) return registered
-  return commit(registered.value, [
-    { type: 'openTab', paneId: target, tab: record, index: node.tabs.length },
-  ])
+  return commit(registered.value, planReplace(registered.value, target, record))
 }
 
 /**
- * Show an existing content in a pane, or focus it if the pane already holds it.
+ * Show a content in a pane, replacing what it was displaying.
  *
  * The counterpart to `openContent`, which is `switch-to-buffer` without saying
  * where: this one names the frame, because "show this here" is a different
- * request from "show this somewhere". Nothing is destroyed either way — a
- * content switched away from keeps its tab, so switching back is one step.
+ * request from "show this somewhere".
+ *
+ * **It replaces, and that is the model rather than a simplification.** A frame
+ * displays one content; a content that has tabs inside it — an editor with its
+ * files, a panel with its pages — draws them itself, because they are its own
+ * state and the shell has no business holding them. So "show this here" is a
+ * swap: the frame displays the new content, and the old one is not destroyed but
+ * *put down* — it stays in the registry, and showing it again is one call
+ * (T15's window/buffer guarantee, unchanged).
  * @param state - the state to change.
  * @param paneId - the pane to show it in.
  * @param contentId - the content to show; it must be registered.
@@ -846,18 +800,17 @@ export function showContent(
     return fail('frames/unknown-target', `pane "${paneId}" does not exist`)
   }
 
-  // Already a tab here: this is a switch, not a re-open.
-  const held = node.tabs.find((tabId) => state.layout.tabs[tabId]?.contentId === contentId)
-  if (held !== undefined) return commit(state, [{ type: 'focusTab', tabId: held }])
-
-  const conflict = kindConflict(state, paneId, content.kind)
-  if (conflict !== undefined) return conflict
-  return commit(state, [{
-    type: 'openTab',
-    paneId,
-    tab: { id: state.minter.next('tab'), kind: content.kind, contentId: content.id, title: content.title },
-    index: node.tabs.length,
-  }])
+  // Already displayed here: this is a focus, not a swap.
+  const showing = displayedTab(state, paneId)
+  if (showing?.contentId === contentId) {
+    return commit(state, [{ type: 'focusTab', tabId: showing.id }])
+  }
+  return commit(state, planReplace(state, paneId, {
+    id: state.minter.next('tab'),
+    kind: content.kind,
+    contentId: content.id,
+    title: content.title,
+  }))
 }
 
 /** Where a frame goes when one has to be made for it. */

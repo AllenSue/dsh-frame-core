@@ -153,8 +153,8 @@ test('the service carries placements through', () => {
 
   assert.equal(frames.openContent('nav', { place: 'left' }).ok, true)
 
-  const nav = frames.project().docked.find((pane) => pane.tabs[0]?.typeId === 'sidebar')
-  const centre = frames.project().docked.find((pane) => pane.tabs[0]?.typeId === 'conversation')
+  const nav = frames.project().docked.find((pane) => pane.content?.typeId === 'sidebar')
+  const centre = frames.project().docked.find((pane) => pane.content?.typeId === 'conversation')
   assert.notEqual(nav, undefined)
   assert.ok((nav?.rect.x ?? 1) < (centre?.rect.x ?? 0))
 })

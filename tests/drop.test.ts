@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { REACT_CAPABILITIES, TUI_CAPABILITIES } from '../src/model/platform.ts'
+import { REACT_CAPABILITIES } from '../src/model/platform.ts'
 import { createFrameState, withMeasurements } from '../src/model/state.ts'
 import type { FrameState } from '../src/model/state.ts'
 import type { FrameTypeDefinition } from '../src/model/types.ts'
 import type { PaneId, TabId } from '../src/vendor/ui-dockkit/contract/types.ts'
-import { dropFrame, placeFloat, placeTab, resizeSplit, splitFrame, undo } from '../src/ops/intents.ts'
+import { dropFrame, floatFrame, placeFloat, placeTab, resizeSplit, splitFrame, undo } from '../src/ops/intents.ts'
 import { placedPanes } from '../src/geometry/rects.ts'
 import { project } from '../src/project/project.ts'
 
@@ -35,15 +35,6 @@ function refused(result: { ok: boolean } & Record<string, any>): string {
   return result.ok === false ? (result.code as string) : ''
 }
 
-/** The active tab of the focused pane. */
-function activeTab(state: FrameState): TabId {
-  const pane = state.layout.nodes[state.layout.activePaneId]
-  assert.equal(pane?.kind, 'pane')
-  const tabId = pane?.kind === 'pane' ? pane.activeTabId : undefined
-  assert.notEqual(tabId, undefined)
-  return tabId as TabId
-}
-
 /** The pane drawn at the left or right of a two-pane layout. */
 function paneAt(state: FrameState, side: 'first' | 'last'): PaneId {
   const ordered = [...placedPanes(state.layout)].sort((a, b) => a.rect.x - b.rect.x)
@@ -52,162 +43,33 @@ function paneAt(state: FrameState, side: 'first' | 'last'): PaneId {
   return chosen?.id as PaneId
 }
 
-test('an edge release splits the target and seats the frame in the new half', () => {
-  // Three panes, so the pane the frame leaves still disappears and the count
-  // still grows: the release splits the *target*, not the source.
-  const two = accepted(splitFrame(ready(), undefined, 'notes'))
-  const three = accepted(splitFrame(two, paneAt(two, 'first'), 'notes'))
-  const left = paneAt(three, 'first')
-  const right = paneAt(three, 'last')
-  const source = three.layout.nodes[left]
-  assert.equal(source?.kind, 'pane')
-  const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
-
-  const next = accepted(dropFrame(three, dragged, { kind: 'dock', paneId: right, zone: 'right' }, 'conversation'))
-
-  assert.equal(placedPanes(next.layout).length, 3)
-  assert.equal(next.history.past.length, 3, 'the drop is one intent, however many operations it took')
-  // The frame that was dragged is now the rightmost pane's content.
-  const rightmost = [...placedPanes(next.layout)].sort((a, b) => a.rect.x - b.rect.x).at(-1)
-  const landed = next.layout.nodes[rightmost?.id as PaneId]
-  assert.equal(landed?.kind, 'pane')
-  assert.equal(
-    landed?.kind === 'pane' ? next.layout.tabs[landed.tabs[0] as TabId]?.kind : undefined,
-    'conversation',
-  )
-})
-
-test('dragging the only frame out of a pane merges that pane away in the same step', () => {
-  // Both panes hold the same kind: a centre release seats the frame among the
-  // target's tabs, and a pane holds one kind only. What this test is about is
-  // the emptied pane, not the kind, so the fixture stays within one.
-  const two = accepted(splitFrame(ready(), undefined, 'conversation'))
-  const left = paneAt(two, 'first')
-  const right = paneAt(two, 'last')
-  const source = two.layout.nodes[left]
-  const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
-
-  // Dropped on the *centre* of the neighbour: the frame moves in and the pane it
-  // came from has nothing left, so it disappears.
-  const next = accepted(dropFrame(two, dragged, { kind: 'dock', paneId: right, zone: 'center' }))
-
-  assert.equal(placedPanes(next.layout).length, 1)
-  assert.equal(next.history.past.length, 2)
-})
-
-test('a release that would mix kinds in one pane is refused', () => {
-  // The rule the fixture above respects. A centre release stacks the frame among
-  // the target's tabs, and a pane holds one kind only.
+test('a tab-level drop is refused, and says why', () => {
+  // Retired with the tab strip: a pointer used to pick up a chip, and a frame
+  // displays one content now, so there is no chip. The intent stays in the
+  // vocabulary and refuses rather than quietly meaning something else.
   const two = accepted(splitFrame(ready(), undefined, 'notes'))
   const left = paneAt(two, 'first')
-  const right = paneAt(two, 'last')
-  const source = two.layout.nodes[left]
+  const source = two.layout.nodes[paneAt(two, 'last')]
   const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
 
-  const refused = dropFrame(two, dragged, { kind: 'dock', paneId: right, zone: 'center' })
-
-  assert.equal(refused.ok, false)
-  assert.equal(refused.ok === false ? refused.code : '', 'frames/kind-mismatch')
-
-  // An *edge* release is exempt, and rightly so: it makes a new pane, and the
-  // frame takes its kind in with it.
   assert.equal(
-    dropFrame(two, dragged, { kind: 'dock', paneId: right, zone: 'right' }, 'conversation').ok,
-    true,
+    refused(dropFrame(two, dragged, { kind: 'dock', paneId: left, zone: 'center' })),
+    'frames/one-content-per-frame',
   )
+  assert.equal(refused(dropFrame(two, dragged, { kind: 'float' })), 'frames/one-content-per-frame')
   assert.equal(two.history.past.length, 1, 'a refusal records nothing')
 })
 
-test('a drop over nothing takes the frame out into a window', () => {
-  const state = ready()
-  const next = accepted(dropFrame(state, activeTab(state), { kind: 'float' }))
+test('a chip reorder is refused, and says why', () => {
+  const two = accepted(splitFrame(ready(), undefined, 'notes'))
+  const left = paneAt(two, 'first')
+  const source = two.layout.nodes[left]
+  const tab = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
 
-  assert.equal(next.layout.floats.length, 1)
-  assert.equal(next.history.past.length, 1)
+  assert.equal(refused(placeTab(two, tab, left, 0)), 'frames/one-content-per-frame')
+  assert.equal(two.history.past.length, 1)
 })
 
-test('an edge release answers to the same three limits a keyboard split does', () => {
-  const budgeted = withMeasurements(
-    createFrameState({
-      startup: CONVERSATION,
-      platform: { id: 'react', capabilities: { ...REACT_CAPABILITIES, maxDockPanes: 1 } },
-      types: [CONVERSATION],
-    }),
-    { viewport: { width: 1000, height: 800 } },
-  )
-  const pane = budgeted.layout.activePaneId
-  assert.equal(
-    refused(dropFrame(budgeted, activeTab(budgeted), { kind: 'dock', paneId: pane, zone: 'right' }, 'conversation')),
-    'frames/pane-budget-exhausted',
-  )
-  assert.equal(budgeted.history.past.length, 0, 'a refusal leaves the history alone')
-
-  const narrow = withMeasurements(
-    createFrameState({
-      startup: CONVERSATION,
-      platform: { id: 'react', capabilities: REACT_CAPABILITIES },
-      types: [CONVERSATION],
-    }),
-    { viewport: { width: 100, height: 100 } },
-  )
-  assert.equal(
-    refused(dropFrame(narrow, activeTab(narrow), { kind: 'dock', paneId: narrow.layout.activePaneId, zone: 'bottom' }, 'conversation')),
-    'frames/too-narrow',
-  )
-
-  const unsplittable = createFrameState({
-    startup: { id: 'pinned', title: () => 'Pinned', policy: { splittable: false } },
-    platform: { id: 'react', capabilities: REACT_CAPABILITIES },
-    types: [{ id: 'pinned', title: () => 'Pinned', policy: { splittable: false } }],
-  })
-  const measured = withMeasurements(unsplittable, { viewport: { width: 1000, height: 800 } })
-  assert.equal(
-    refused(dropFrame(measured, activeTab(measured), { kind: 'dock', paneId: measured.layout.activePaneId, zone: 'right' })),
-    'frames/policy-refused',
-  )
-})
-
-test('a target with no floating frames refuses a release over nothing', () => {
-  const terminal = withMeasurements(
-    createFrameState({
-      startup: CONVERSATION,
-      platform: { id: 'headless', capabilities: { ...TUI_CAPABILITIES, floats: 'none' } },
-      types: [CONVERSATION],
-    }),
-    { viewport: { width: 80, height: 24 } },
-  )
-  assert.equal(
-    refused(dropFrame(terminal, activeTab(terminal), { kind: 'float' })),
-    'frames/unsupported-on-platform',
-  )
-})
-
-test('a release that would move nothing is accepted without becoming an undo step', () => {
-  const state = ready()
-  const pane = state.layout.activePaneId
-  const next = accepted(dropFrame(state, activeTab(state), { kind: 'dock', paneId: pane, zone: 'center' }))
-
-  assert.equal(next, state, 'the core answers a no-op with the very same state object')
-  assert.equal(next.history.past.length, 0)
-})
-
-test('the two paths to a split agree on what the user ends up looking at', () => {
-  const start = ready()
-
-  // The key map: the frame stays where it is and a new one appears beside it.
-  const byKey = accepted(splitFrame(start, undefined, 'conversation'))
-  // The pointer: the frame is dragged to the same edge, and the pane it leaves
-  // is backfilled by the type it was showing.
-  const byDrag = accepted(
-    dropFrame(start, activeTab(start), { kind: 'dock', paneId: start.layout.activePaneId, zone: 'right' }, 'conversation'),
-  )
-
-  const shape = (state: FrameState): unknown => project(state).docked
-    .map((pane) => ({ rect: pane.rect, kinds: pane.tabs.map((tab) => tab.typeId) }))
-    .sort((a, b) => a.rect.x - b.rect.x)
-
-  assert.deepEqual(shape(byDrag), shape(byKey))
-})
 
 test('a divider drag records the sizes it reached, and steps back in one move', () => {
   const two = accepted(splitFrame(ready(), undefined, 'notes'))
@@ -242,7 +104,7 @@ test('a divider drag that reaches where it already was records nothing', () => {
 })
 
 test('a floating frame moves and resizes through one intent', () => {
-  const floated = accepted(dropFrame(ready(), activeTab(ready()), { kind: 'float' }))
+  const floated = accepted(floatFrame(ready()))
   const paneId = floated.layout.floats[0] as PaneId
   const start = floated.layout.nodes[paneId]
   assert.equal(start?.kind, 'pane')
@@ -256,7 +118,7 @@ test('a floating frame moves and resizes through one intent', () => {
 })
 
 test('a floating rectangle is kept inside the area and above the size floor', () => {
-  const floated = accepted(dropFrame(ready(), activeTab(ready()), { kind: 'float' }))
+  const floated = accepted(floatFrame(ready()))
   const paneId = floated.layout.floats[0] as PaneId
 
   const next = accepted(placeFloat(floated, paneId, { x: 4, y: 4, width: 0.001, height: 0.001 }))
@@ -267,35 +129,3 @@ test('a floating rectangle is kept inside the area and above the size floor', ()
   assert.ok(rect!.x + rect!.width <= 1.0001 && rect!.y + rect!.height <= 1.0001, 'it stays inside')
 })
 
-test('a chip moves to another caret slot in the strip it is already in', () => {
-  // One kind throughout: what is being tested is the caret slot, and a pane
-  // holds one kind only.
-  const two = accepted(splitFrame(ready(), undefined, 'conversation'))
-  const left = paneAt(two, 'first')
-  const right = paneAt(two, 'last')
-  const source = two.layout.nodes[right]
-  const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
-
-  // Dropping on the neighbour's centre is what puts two chips in one strip.
-  const stacked = accepted(dropFrame(two, dragged, { kind: 'dock', paneId: left, zone: 'center' }))
-  const node = stacked.layout.nodes[left]
-  assert.equal(node?.kind, 'pane')
-  const before = (node?.kind === 'pane' ? node.tabs : []).map((tabId) => stacked.layout.tabs[tabId]?.kind)
-  assert.deepEqual(before, ['conversation', 'conversation'])
-
-  const first = (node?.kind === 'pane' ? node.tabs[0] : undefined) as TabId
-  const next = accepted(placeTab(stacked, first, left, 2))
-  const after = next.layout.nodes[left]
-  const order = (after?.kind === 'pane' ? after.tabs : [])
-  assert.equal(order[0], node?.kind === 'pane' ? node.tabs[1] : undefined, 'the two swapped places')
-})
-
-test('a chip cannot be placed into a strip it is not in; that is a drop', () => {
-  const two = accepted(splitFrame(ready(), undefined, 'notes'))
-  const left = paneAt(two, 'first')
-  const source = two.layout.nodes[paneAt(two, 'last')]
-  const dragged = (source?.kind === 'pane' ? source.tabs[0] : undefined) as TabId
-
-  assert.equal(refused(placeTab(two, dragged, left, 0)), 'frames/unknown-target')
-  assert.equal(two.history.past.length, 1)
-})

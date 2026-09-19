@@ -5,7 +5,7 @@
  * `project` is a pure function of state. A capability limit is applied here and
  * never written back to the model, so one saved preset loads on every target.
  */
-import type { PaneId, SplitId, TabId } from '../vendor/ui-dockkit/contract/types.ts'
+import type { PaneId, SplitId } from '../vendor/ui-dockkit/contract/types.ts'
 import { dividerRect, FULL_RECT, splitRect, toExtent, type Extent, type NormalizedRect } from '../geometry/rect.ts'
 import type { FrameState } from '../model/state.ts'
 import { getType } from '../model/types.ts'
@@ -13,20 +13,28 @@ import { getType } from '../model/types.ts'
 /** Why a split of this pane would be refused now. */
 export type SplitBlock = 'budget' | 'narrow'
 
-/** One tab as a renderer draws it. */
-export interface ProjectedTab {
-  /** The tab's identity: what a drag names when it moves this chip. */
-  readonly id: TabId
+/** What a frame displays, as a renderer draws it. */
+export interface ProjectedContentRef {
+  /** The content's identity: what `showContent` names to bring it back. */
+  readonly contentId: string
+  /** The registered type that draws it; an unregistered kind draws a titled frame. */
   readonly typeId: string
   readonly title: string
-  readonly active: boolean
 }
 
 /** One docked pane, with its area already resolved. */
 export interface ProjectedPane {
   readonly id: PaneId
   readonly rect: NormalizedRect
-  readonly tabs: readonly ProjectedTab[]
+  /**
+   * What this frame displays, or `undefined` for a frame waiting for a choice.
+   *
+   * **One content, not a list of them.** A frame is a place where one thing is
+   * shown; a content that has tabs inside it — an editor with its files, a panel
+   * with its pages — draws them itself, because they are its own state. The core
+   * has no tab vocabulary, so none appears here.
+   */
+  readonly content: ProjectedContentRef | undefined
   /** Whether the core would accept a split of this pane right now. */
   readonly canSplit: boolean
   /** Why it would not, when `canSplit` is false. */
@@ -57,7 +65,8 @@ export interface ProjectedFloat {
   readonly rect: NormalizedRect
   /** What the target should do with it: draw a positioned panel, or a switchable overlay. */
   readonly presentation: FloatPresentation
-  readonly tabs: readonly ProjectedTab[]
+  /** What it displays; a floating frame holds one content, like any other. */
+  readonly content: ProjectedContentRef | undefined
   /** Whether the target may honour `rect`; false means it places the frame itself. */
   readonly rectHonoured: boolean
 }
@@ -194,23 +203,20 @@ function splitVerdict(walk: Walk, rect: NormalizedRect): { canSplit: boolean; bl
     : { canSplit: false, blockedBy: 'narrow' }
 }
 
-/** One pane's tabs, in the order the pane holds them. */
-function projectTabs(walk: Walk, paneId: PaneId): readonly ProjectedTab[] {
+/** What one pane displays, or `undefined` when it is waiting for a choice. */
+function projectContent(walk: Walk, paneId: PaneId): ProjectedContentRef | undefined {
   const pane = walk.state.layout.nodes[paneId]
-  if (pane === undefined || pane.kind !== 'pane') return []
-  const tabs: ProjectedTab[] = []
-  for (const tabId of pane.tabs) {
-    const record = walk.state.layout.tabs[tabId]
-    if (record === undefined) continue
-    const definition = getType(walk.state.types, record.kind)
-    tabs.push({
-      id: record.id,
-      typeId: record.kind,
-      title: definition === undefined ? record.title : definition.title(),
-      active: tabId === pane.activeTabId,
-    })
+  if (pane === undefined || pane.kind !== 'pane') return undefined
+  const tabId = pane.tabs[0]
+  if (tabId === undefined) return undefined
+  const record = walk.state.layout.tabs[tabId]
+  if (record === undefined) return undefined
+  const definition = getType(walk.state.types, record.kind)
+  return {
+    contentId: record.contentId,
+    typeId: record.kind,
+    title: definition === undefined ? record.title : definition.title(),
   }
-  return tabs
 }
 
 /** Visit one node, placing it inside `rect`. */
@@ -232,7 +238,7 @@ function visit(walk: Walk, nodeId: string, rect: NormalizedRect): void {
     walk.docked.push({
       id: node.id,
       rect,
-      tabs: projectTabs(walk, node.id),
+      content: projectContent(walk, node.id),
       canSplit: verdict.canSplit,
       splitBlockedBy: verdict.blockedBy,
     })
@@ -292,7 +298,7 @@ function collectFloats(walk: Walk): void {
       id: paneId,
       rect: node.rect ?? FLOAT_FALLBACK,
       presentation: floats === 'overlay' ? 'overlay' : 'window',
-      tabs: projectTabs(walk, paneId),
+      content: projectContent(walk, paneId),
       rectHonoured,
     })
   }

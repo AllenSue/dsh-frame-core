@@ -71,7 +71,7 @@ test('closing the last frame onto a content leaves the content alone', () => {
   const state = ready()
   const closed = accepted(closeFrame(state))
 
-  assert.deepEqual(project(closed).docked[0]?.tabs, [], 'the view is gone')
+  assert.equal(project(closed).docked[0]?.content, undefined, 'the view is gone')
   assert.equal(getContent(closed.contents, 'conversation') !== undefined, true, 'the content is not')
   assert.equal(shown(closed, 'conversation'), false)
 })
@@ -130,9 +130,9 @@ test('opening a content nothing shows makes a view that names the content', () =
   const closed = accepted(closeFrame(state))
   const reopened = accepted(openContent(closed, 'conversation'))
 
-  const pane = project(reopened).docked.find((candidate) => candidate.tabs.length > 0)
+  const pane = project(reopened).docked.find((candidate) => candidate.content !== undefined)
   assert.notEqual(pane, undefined)
-  assert.deepEqual(pane?.tabs.map((tab) => tab.typeId), ['conversation'])
+  assert.equal(pane?.content?.typeId, 'conversation')
   // The view names the content, not merely a type that happens to match it.
   const tab = Object.values(reopened.layout.tabs)[0]
   assert.equal(tab?.contentId, 'conversation')
@@ -257,15 +257,9 @@ test('a content the service never saw cannot be opened', () => {
   assert.equal(frames.project(), before)
 })
 
-test('a drop that seats a view also takes up its content', () => {
+test('a frame a split seeded has taken up its content', () => {
   const frames = service()
   frames.split(undefined, 'notes')
-  const panes = frames.project().docked
-  const left = panes[0]?.id as PaneId
-  const right = panes[1]?.id as PaneId
-  const dragged = frames.project().docked.find((pane) => pane.id === right)?.tabs[0]?.id as TabId
-
-  frames.drop(dragged, { kind: 'dock', paneId: left, zone: 'center' })
 
   assert.deepEqual(frames.contents().map((content) => content.id).sort(), ['conversation', 'notes'])
 })

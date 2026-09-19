@@ -178,11 +178,13 @@ classDiagram
     ContentRegistry o-- FrameContent
     FrameTypeRegistry o-- FrameTypeDefinition
     FramePlatform *-- FrameCapabilities
-    LayoutState ..> TabRecord : tabs 里的是视图
+    LayoutState ..> TabRecord : 引擎的视图记录（一格恒一条）
     FrameContent ..> TabRecord : contentId 相连
 ```
 
-> **`layout.tabs` 是视图、`contents` 是内容。** 前者答"谁在显示、显示在哪一格"，后者答"有什么可显示"。两者用 `contentId` 相连：视图可以比内容多（同一内容开两格），内容也可以比视图多（关掉了但还活着）。
+> **一格显示一个内容；tab 不是核心的词汇。** 引擎的 `LayoutState.tabs` 仍在（那是 vendored 模型，浮层本来就是"capacity 1 tab, drawn without a tab strip"），但本层把它**恒定为每格一条**：`PaneNode.tabs` 永远是长度 1 或 0，`moveTab`/`reorderTab` 这些 op 不再被任何意图产生。上面这一层只说 **content**：一格显示哪个内容、哪个内容被换下但还活着。
+>
+> **一个 content 内部有没有 tab，是它自己的插件的事**（editor 的文件页、右栏面板的页签都是这样画的）。核心既不画、也不知道，所以"同一格的 tab 混用"这种事在模型里根本不存在。
 
 ### 3.2 操作层
 
@@ -196,8 +198,8 @@ classDiagram
         +dockFrame(state, paneId?) FrameResult
         +focusFrame(state, paneId) FrameResult
         +moveFocus(state, direction) FrameResult
-        +dropFrame(state, tabId, target, seed?) FrameResult
-        +placeTab(state, tabId, toPaneId, index) FrameResult
+        +dropFrame(state, tabId, target, seed?) FrameResult（已退场：拒绝）
+        +placeTab(state, tabId, toPaneId, index) FrameResult（已退场：拒绝）
         +resizeSplit(state, splitId, sizes) FrameResult
         +resizePane(state, paneId, fraction, minimum?) FrameResult
         +placeFloat(state, paneId, rect) FrameResult
@@ -274,7 +276,7 @@ classDiagram
     class ProjectedPane {
         +PaneId id
         +NormalizedRect rect
-        +ProjectedTab[] tabs
+        +ProjectedContentRef content
         +boolean canSplit
         +SplitBlock splitBlockedBy
     }
@@ -282,14 +284,13 @@ classDiagram
         +PaneId id
         +NormalizedRect rect
         +FloatPresentation presentation
-        +ProjectedTab[] tabs
+        +ProjectedContentRef content
         +boolean rectHonoured
     }
-    class ProjectedTab {
-        +TabId id
+    class ProjectedContentRef {
+        +string contentId
         +string typeId
         +string title
-        +boolean active
     }
     class ProjectedDivider {
         +SplitId splitId
@@ -315,8 +316,8 @@ classDiagram
     FrameViewProjection *-- ProjectedFloat
     FrameViewProjection *-- ProjectedDivider
     FrameViewProjection *-- Degradation
-    ProjectedPane *-- ProjectedTab
-    ProjectedFloat *-- ProjectedTab
+    ProjectedPane *-- ProjectedContentRef
+    ProjectedFloat *-- ProjectedContentRef
 ```
 
 > `project()` 是**纯函数**，且**引用只在布局真的变了时才换**（`revision` 随之递增）。渲染端因此可以用引用比较决定要不要重画。
@@ -377,8 +378,8 @@ classDiagram
         +focus(paneId) FrameResult
         +moveFocus(direction) FrameResult
         +open(typeId) FrameResult
-        +drop(tabId, target, seed?) FrameResult
-        +placeTab(tabId, toPaneId, index) FrameResult
+        +drop(tabId, target, seed?) FrameResult（拒绝：没有 chip 可拖）
+        +placeTab(tabId, toPaneId, index) FrameResult（拒绝：没有 strip 可排）
         +resizeSplit(splitId, sizes) FrameResult
         +resizePane(paneId, fraction, minimum?) FrameResult
         +placeFloat(paneId, rect) FrameResult

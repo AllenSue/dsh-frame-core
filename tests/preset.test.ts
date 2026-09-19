@@ -5,7 +5,7 @@ import { REACT_CAPABILITIES } from '../src/model/platform.ts'
 import { createFrameState, withMeasurements } from '../src/model/state.ts'
 import type { FrameState } from '../src/model/state.ts'
 import type { FrameTypeDefinition } from '../src/model/types.ts'
-import type { PaneId, TabId } from '../src/vendor/ui-dockkit/contract/types.ts'
+import type { PaneId } from '../src/vendor/ui-dockkit/contract/types.ts'
 import { floatFrame, placeFloat, splitFrame } from '../src/ops/intents.ts'
 import { placedPanes } from '../src/geometry/rects.ts'
 import {
@@ -386,24 +386,44 @@ test('a float keeps its rectangle across a save and load', async () => {
   assert.deepEqual(frames.project().floats[0]?.rect, { x: 0.2, y: 0.3, width: 0.25, height: 0.35 })
 })
 
-test('two tabs of one kind in a pane survive a round trip', async () => {
-  const frames = service({ presets: medium().port })
-  // Same kind throughout: a pane holds one kind only, so stacking needs both
-  // panes to be the same sort of thing.
-  frames.split(undefined, 'conversation')
-  const panes = frames.project().docked
-  const left = panes[0]?.id as PaneId
-  const right = panes[1]?.id as PaneId
-  const dragged = frames.project().docked.find((pane) => pane.id === right)?.tabs[0]?.id as TabId
-  frames.drop(dragged, { kind: 'dock', paneId: left, zone: 'center' })
-  const stacked = frames.project()
-  assert.equal(stacked.docked[0]?.tabs.length, 2, 'the fixture actually stacked two chips')
-  await frames.savePreset('stacked')
+test('a preset written when frames had strips loads with one content per frame', async () => {
+  const { port, records } = medium()
+  // A v1 record from a build whose frames had tab strips: one pane, three views.
+  const stacked: Preset = {
+    version: PRESET_FORMAT_VERSION,
+    name: 'stacked',
+    mint: 0,
+    layout: {
+      nodes: {
+        pane1: {
+          kind: 'pane', id: 'pane1' as PaneId, host: 'dock',
+          tabs: ['tab1', 'tab2'] as never, activeTabId: 'tab2' as never, rect: undefined,
+        },
+      } as unknown as Preset['layout']['nodes'],
+      tabs: {
+        tab1: { id: 'tab1' as never, kind: 'conversation', contentId: 'conversation', title: 'Conversation' },
+        tab2: { id: 'tab2' as never, kind: 'notes', contentId: 'notes', title: 'Notes' },
+      } as unknown as Preset['layout']['tabs'],
+      rootId: 'pane1' as PaneId,
+      floats: [],
+      activePaneId: 'pane1' as PaneId,
+      expanded: true,
+      mode: 'push',
+    },
+  }
+  records.set('stacked', JSON.parse(JSON.stringify(stacked)) as unknown)
+  const frames = createFramesService({ startup: CONVERSATION, presets: port })
+  frames.registerType({ id: 'notes', title: () => 'Notes' })
 
-  frames.split(undefined, 'conversation')
-  await frames.applyPreset('stacked')
+  assert.equal((await frames.applyPreset('stacked')).ok, true)
 
-  assert.deepEqual(frames.project().docked, stacked.docked)
+  const pane = frames.project().docked[0]
+  assert.equal(pane?.content?.typeId, 'notes', 'the view that was active is the one that stays')
+  // The other content is put down, not destroyed: the shell still holds it.
+  assert.deepEqual(
+    frames.contents().map((content) => content.id).sort(),
+    ['conversation', 'notes'],
+  )
 })
 
 test('a preset holding an empty pane is still a layout the shell can drive', async () => {
@@ -432,7 +452,7 @@ test('a preset holding an empty pane is still a layout the shell can drive', asy
 
   assert.equal((await frames.applyPreset('empty')).ok, true)
   assert.equal(frames.project().docked.length, 1)
-  assert.deepEqual(frames.project().docked[0]?.tabs, [])
+  assert.equal(frames.project().docked[0]?.content, undefined)
 })
 
 test('a preset naming a type the shell never registered still loads', async () => {
@@ -448,7 +468,7 @@ test('a preset naming a type the shell never registered still loads', async () =
   reader.reportMeasurements(VIEWPORT)
   assert.equal((await reader.applyPreset('with-notes')).ok, true)
 
-  const kinds = reader.project().docked.flatMap((pane) => pane.tabs.map((tab) => tab.typeId))
+  const kinds = reader.project().docked.flatMap((pane) => (pane.content === undefined ? [] : [pane.content.typeId]))
   assert.deepEqual(kinds.sort(), ['conversation', 'notes'])
 })
 

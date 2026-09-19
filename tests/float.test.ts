@@ -33,13 +33,13 @@ test('floating a pane moves it out of the docked tree and into the projection', 
   // The root pane stays behind with nothing in it: reseeding an emptied root is
   // the content provider's decision, not the core's.
   assert.equal(placedPanes(floated.layout).length, 1)
-  assert.equal(project(floated).docked[0]?.tabs.length, 0)
+  assert.equal(project(floated).docked[0]?.content, undefined)
 
   const view = project(floated)
   assert.equal(view.floats.length, 1)
   assert.equal(view.floats[0]?.presentation, 'window')
   assert.equal(view.floats[0]?.rectHonoured, true)
-  assert.deepEqual(view.floats[0]?.tabs.map((tab) => tab.title), ['Conversation'])
+  assert.equal(view.floats[0]?.content?.title, 'Conversation')
   assert.deepEqual(view.degradations, [])
 })
 

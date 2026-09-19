@@ -186,14 +186,16 @@ test('a terminal target projects the same tree a browser does, minus what it can
   assert.equal(browser.floats.every((frame) => frame.rectHonoured), true)
 })
 
-test('a tab keeps its identity across targets, so a view can be pointed at one again', () => {
+test('a content keeps its identity across targets, so a view can be pointed at one again', () => {
   const browser = project(withPlatform(FIXTURE, { id: 'react', capabilities: REACT_CAPABILITIES }))
   const terminal = project(withPlatform(FIXTURE, { id: 'tui', capabilities: TUI_SHAPED }))
 
-  const ids = (view: typeof browser): readonly string[] =>
-    view.docked.flatMap((pane) => pane.tabs.map((tab) => `${tab.id}:${tab.typeId}`))
+  const shown = (view: typeof browser): readonly string[] =>
+    view.docked.flatMap((pane) => (pane.content === undefined
+      ? []
+      : [`${pane.content.contentId}:${pane.content.typeId}`]))
 
-  assert.deepEqual(ids(terminal), ids(browser))
+  assert.deepEqual(shown(terminal), shown(browser))
 })
 
 test('a target that reports no viewport is told nothing is split-capable', () => {

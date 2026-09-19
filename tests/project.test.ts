@@ -40,12 +40,13 @@ test('a configuration-free state projects one frame filling the area', () => {
   assert.deepEqual(view.degradations, [])
   assert.equal(view.docked.length, 1)
   assert.deepEqual(view.docked[0]?.rect, FULL_RECT)
-  // The chip carries the tab's identity, because a drag names the tab it moves.
-  assert.deepEqual(
-    view.docked[0]?.tabs.map((tab) => ({ ...tab, id: 'minted' })),
-    [{ id: 'minted', typeId: 'conversation', title: 'Conversation', active: true }],
-  )
-  assert.equal(typeof view.docked[0]?.tabs[0]?.id, 'string')
+  // What the frame displays, and nothing about tabs: a frame has no tab list to
+  // report, because what a content shows inside itself is the content's business.
+  assert.deepEqual(view.docked[0]?.content, {
+    contentId: 'conversation',
+    typeId: 'conversation',
+    title: 'Conversation',
+  })
   assert.equal(view.active, state.layout.activePaneId)
 })
 

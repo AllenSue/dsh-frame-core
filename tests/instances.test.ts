@@ -6,7 +6,7 @@ import { createFrameState, withMeasurements } from '../src/model/state.ts'
 import type { FrameState } from '../src/model/state.ts'
 import type { FrameTypeDefinition } from '../src/model/types.ts'
 import { contentList, getContent } from '../src/model/content.ts'
-import type { PaneId, TabId } from '../src/vendor/ui-dockkit/contract/types.ts'
+import type { PaneId } from '../src/vendor/ui-dockkit/contract/types.ts'
 import {
   closeFrame, createContent, kindOfPane, registerFrame, showContent, splitFrame,
 } from '../src/ops/intents.ts'
@@ -63,11 +63,19 @@ function refused(result: { ok: boolean } & Record<string, any>): string {
   return result.ok === false ? (result.code as string) : ''
 }
 
-/** The tabs of the pane that holds any, and how many there are. */
+/** What a pane displays, as a list so a test can say "exactly one of these". */
 function kindsOf(state: FrameState, paneId: PaneId): readonly string[] {
   const node = state.layout.nodes[paneId]
   if (node === undefined || node.kind !== 'pane') return []
   return node.tabs.map((tabId) => state.layout.tabs[tabId]?.kind ?? '?')
+}
+
+/** The content a pane displays, by id. */
+function shownContent(state: FrameState, paneId: PaneId): string | undefined {
+  const node = state.layout.nodes[paneId]
+  if (node === undefined || node.kind !== 'pane') return undefined
+  const tabId = node.tabs[0]
+  return tabId === undefined ? undefined : state.layout.tabs[tabId]?.contentId
 }
 
 // ------------------------------------------------------------ instantiation
@@ -101,7 +109,7 @@ test('the type says what a new instance is, and the core registers exactly that'
   assert.equal(getContent(made.contents, '/tmp/file-1.ts')?.title, '/tmp/file-1.ts')
 })
 
-test('a second instance of the same type joins the pane as another tab', () => {
+test('a second instance of the same type replaces the first in that pane', () => {
   const editor = editorType()
   const state = emptyPane([CONVERSATION, editor.definition])
   const pane = placedPanes(state.layout)[1]?.id as PaneId
@@ -109,14 +117,15 @@ test('a second instance of the same type joins the pane as another tab', () => {
   const one = accepted(createContent(state, 'editor', pane))
   const two = accepted(createContent(one, 'editor', pane))
 
-  assert.deepEqual(kindsOf(two, pane), ['editor', 'editor'])
+  assert.deepEqual(kindsOf(two, pane), ['editor'])
   assert.deepEqual(editor.made, ['/tmp/file-1.ts', '/tmp/file-2.ts'])
-  // Two tabs, two contents: different files, not two views of one.
-  const contents = two.layout.nodes[pane]?.kind === 'pane'
-    ? (two.layout.nodes[pane] as { tabs: readonly TabId[] }).tabs
-      .map((tabId) => two.layout.tabs[tabId]?.contentId)
-    : []
-  assert.equal(new Set(contents).size, 2)
+  // The one that was put down is not destroyed: the shell still holds both files,
+  // and only one frame is showing one of them.
+  assert.deepEqual(
+    contentList(two.contents).map((content) => content.id).sort(),
+    ['/tmp/file-1.ts', '/tmp/file-2.ts', 'conversation'],
+  )
+  assert.equal(shownContent(two, pane), '/tmp/file-2.ts')
 })
 
 test('a type that declares no factory cannot be instantiated', () => {
@@ -167,17 +176,15 @@ test('switching shows another content in the same pane and keeps the old one', (
   const one = accepted(createContent(state, 'editor', pane))
   const two = accepted(createContent(one, 'editor', pane))
 
-  // The second instance is the focused tab; switch back to the first.
+  // The second file is showing; switch back to the first.
+  assert.equal(shownContent(two, pane), '/tmp/file-2.ts')
   const back = accepted(showContent(two, pane, '/tmp/file-1.ts'))
 
-  assert.deepEqual(kindsOf(back, pane), ['editor', 'editor'], 'nothing was destroyed')
-  const node = back.layout.nodes[pane]
-  const activeId = node?.kind === 'pane' ? node.activeTabId : undefined
-  assert.equal(back.layout.tabs[activeId as TabId]?.contentId, '/tmp/file-1.ts')
+  assert.equal(shownContent(back, pane), '/tmp/file-1.ts')
   assert.equal(getContent(back.contents, '/tmp/file-2.ts') !== undefined, true, 'the other is still held')
 })
 
-test('switching to a content the pane does not hold adds it as a tab', () => {
+test('switching to a content the shell holds but no frame shows replaces what that frame was showing', () => {
   const editor = editorType()
   const state = emptyPane([CONVERSATION, editor.definition])
   const pane = placedPanes(state.layout)[1]?.id as PaneId
@@ -187,18 +194,22 @@ test('switching to a content the pane does not hold adds it as a tab', () => {
 
   const shown = accepted(showContent(parked, pane, '/tmp/parked.ts'))
 
-  assert.deepEqual(kindsOf(shown, pane), ['editor', 'editor'])
+  assert.equal(shownContent(shown, pane), '/tmp/parked.ts')
+  assert.equal(getContent(shown.contents, '/tmp/file-1.ts') !== undefined, true, 'what it replaced is put down, not destroyed')
 })
 
-test('switching to a content of another kind is refused', () => {
+test('switching to a content of another kind is not a conflict any more', () => {
+  // A pane holds one content, so there is nothing for a second kind to clash
+  // with: the frame simply stops displaying one thing and displays another.
   const state = emptyPane([CONVERSATION])
   const pane = placedPanes(state.layout)[1]?.id as PaneId
-  // The first pane holds the conversation; the empty one becomes a conversation
-  // pane, and then a console may not join it.
   const seated = accepted(showContent(state, pane, 'conversation'))
   const withConsole = accepted(registerFrame(seated, { id: 'console-1', kind: 'console', title: 'Console' }))
 
-  assert.equal(refused(showContent(withConsole, pane, 'console-1')), 'frames/kind-mismatch')
+  const swapped = accepted(showContent(withConsole, pane, 'console-1'))
+
+  assert.equal(shownContent(swapped, pane), 'console-1')
+  assert.equal(getContent(swapped.contents, 'conversation') !== undefined, true)
 })
 
 test('switching to a content the shell does not hold is refused', () => {
@@ -279,7 +290,7 @@ test('the service carries instantiation, switching and the kind query through', 
   service.registerType(editor.definition)
   service.reportMeasurements(VIEWPORT)
   service.split(undefined, undefined)
-  const pane = service.project().docked.find((candidate) => candidate.tabs.length === 0)?.id as PaneId
+  const pane = service.project().docked.find((candidate) => candidate.content === undefined)?.id as PaneId
 
   assert.equal(service.paneKind(pane), undefined)
   assert.equal(service.createContent('editor', pane).ok, true)

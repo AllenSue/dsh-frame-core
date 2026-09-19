@@ -10,7 +10,7 @@
  * stored one is validated and migrated; where it is kept is a port the host
  * answers, because the same preset has to load in a browser and in a terminal.
  */
-import type { LayoutState } from '../vendor/ui-dockkit/contract/types.ts'
+import type { LayoutNode, LayoutState, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
 import { createIdMinter } from '../vendor/ui-dockkit/engine/initial.ts'
 import type { ContentRegistry } from '../model/content.ts'
 import { registerContent } from '../model/content.ts'
@@ -220,7 +220,7 @@ export function parsePreset(raw: unknown): FrameResult<Preset> {
 export function withPreset(state: FrameState, preset: Preset): FrameState {
   // Adopted through the same canonical form, so the shell's live tree and the
   // record on disk are the same shape and a re-save writes identical bytes.
-  const layout = canonicalLayout(preset.layout)
+  const layout = oneContentPerPane(canonicalLayout(preset.layout))
   return {
     ...state,
     layout,
@@ -235,6 +235,42 @@ export function withPreset(state: FrameState, preset: Preset): FrameState {
     activePresetId: preset.name,
     revision: state.revision + 1,
   }
+}
+
+/**
+ * Every pane left displaying exactly one content.
+ *
+ * A frame displays one content, so a stored tree that names several in one frame
+ * is a tree from a shell that had tab strips. The view it was *showing* is the
+ * one that stays — that is what the frame looked like — and the others are put
+ * down: their records go, their contents stay in the registry, exactly as they
+ * would if a person had switched the frame to something else.
+ *
+ * The normalisation is idempotent, which is what lets a preset be adopted without
+ * asking which build wrote it.
+ * @param layout - the layout to normalise; it is not modified.
+ * @returns the same tree with one view per pane.
+ */
+function oneContentPerPane(layout: LayoutState): LayoutState {
+  const dropped = new Set<string>()
+  let changed = false
+  const nodes: Record<string, LayoutNode> = { ...layout.nodes }
+  for (const [id, node] of Object.entries(layout.nodes)) {
+    if (node.kind !== 'pane' || node.tabs.length <= 1) continue
+    const kept = node.activeTabId !== undefined && node.tabs.includes(node.activeTabId)
+      ? node.activeTabId
+      : node.tabs[0] as TabId
+    for (const tabId of node.tabs) if (tabId !== kept) dropped.add(tabId)
+    nodes[id] = { ...node, tabs: [kept], activeTabId: kept }
+    changed = true
+  }
+  if (!changed) return layout
+  const tabs: Record<string, TabRecord> = { ...layout.tabs }
+  for (const tabId of dropped) delete tabs[tabId]
+  // A tree whose every pane is empty has no root left to focus, so the active
+  // pane is only kept when it still exists.
+  const activePaneId = nodes[layout.activePaneId] === undefined ? layout.rootId as typeof layout.activePaneId : layout.activePaneId
+  return { ...layout, nodes, tabs, activePaneId }
 }
 
 /**

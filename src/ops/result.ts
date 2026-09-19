@@ -18,6 +18,15 @@ export type FrameErrorCode =
   | 'frames/not-measured'
   | 'frames/nothing-to-undo'
   | 'frames/nothing-to-redo'
+  /**
+   * Asked for a tab-level move in a shell that has no tab level.
+   *
+   * A frame shows one content; whether a content has tabs inside it is its own
+   * plugin's business. So there is no strip to reorder and nothing to drop among
+   * a pane's tabs — the operations that used to mean those are refused rather
+   * than quietly doing something else.
+   */
+  | 'frames/one-content-per-frame'
 
 /** The outcome of one operation. */
 export type FrameResult<T> =

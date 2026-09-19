@@ -1,4 +1,4 @@
-﻿import { test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { REACT_CAPABILITIES } from '../src/model/platform.ts'
@@ -160,7 +160,7 @@ test('floating a frame out gives the room back the same way', () => {
 test('a projection reports the settled widths, not the renormalised ones', () => {
   const { state, notes } = threeColumns()
   const closed = accepted(closeFrame(state, notes))
-  const rail = project(closed).docked.find((pane) => pane.tabs[0]?.typeId === 'rail')
+  const rail = project(closed).docked.find((pane) => pane.content?.typeId === 'rail')
 
   assert.equal(Math.round((rail?.rect.width ?? 0) * 1000), widthsByKind(state).rail)
 })
