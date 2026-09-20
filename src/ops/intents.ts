@@ -344,7 +344,18 @@ export function splitFrame(
 }
 
 /**
- * Close every tab of a pane and drop the pane if it was not the root.
+ * Close a frame: take down what it displays, and take the frame away with it.
+ *
+ * Two things this must not confuse. The **root pane is the shell** — closing it
+ * takes down what it was showing and leaves the shell standing, because there is
+ * no parent for it to collapse into and a shell with no docked area is nothing to
+ * draw. Every other frame is a frame: it goes.
+ *
+ * A frame **with nothing in it** used to be refused here ("holds nothing to
+ * close"), from a time when an empty pane could only be the shell itself. Frames
+ * made by `split` start empty and wait for a choice, so that refusal left frames
+ * a user could create and then not remove — deleting a frame is exactly what the
+ * chord means.
  * @param state - the state to change.
  * @param paneId - the pane to close; defaults to the focused one.
  * @returns the next state, or why the close was refused.
@@ -355,18 +366,20 @@ export function closeFrame(state: FrameState, paneId?: PaneId): FrameResult<Fram
   if (node === undefined || node.kind !== 'pane') {
     return fail('frames/unknown-target', `pane "${target}" does not exist`)
   }
-  if (node.tabs.length === 0) {
-    return fail('frames/unknown-target', `pane "${target}" holds nothing to close`)
-  }
   if (activePolicy(state, target).closable === false) {
     return fail('frames/policy-refused', `the content of pane "${target}" refuses to be closed`)
   }
 
   const ops: LayoutOp[] = node.tabs.map((tabId) => ({ type: 'closeTab', tabId }))
-  // A docked pane that is not the root merges away once its last tab is gone.
+  // A docked pane that is not the root merges away — whether it still holds a
+  // view being taken down or holds nothing at all, which is how an empty frame
+  // is deleted.
   if (node.host === 'dock' && target !== state.layout.rootId) {
     ops.push({ type: 'merge', paneId: target })
   }
+  // Nothing to take down and nowhere to merge: this is the shell, already in the
+  // state the close would leave it in.
+  if (ops.length === 0) return ok(state)
   return commit(state, ops)
 }
 

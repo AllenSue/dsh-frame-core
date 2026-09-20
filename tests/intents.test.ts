@@ -99,6 +99,44 @@ test('closing a split pane merges it away and undo brings it back', () => {
   assert.equal(placedPanes(again.layout).length, 1)
 })
 
+/** The id of the pane holding nothing, if there is one. */
+function emptyPane(state: FrameState): string | undefined {
+  return placedPanes(state.layout)
+    .map((pane) => state.layout.nodes[pane.id])
+    .find((node) => node?.kind === 'pane' && node.tabs.length === 0)?.id
+}
+
+test('a frame with nothing in it is deleted by closing it', () => {
+  // A split with no seed starts empty and waits for a choice: it is a frame the
+  // user can see, so closing it has to take it away.
+  const split = accepted(splitFrame(ready(), undefined))
+  const empty = emptyPane(split)
+  assert.notEqual(empty, undefined)
+  assert.equal(split.history.past.length, 1)
+
+  const closed = accepted(closeFrame(split, empty as never))
+  assert.equal(placedPanes(closed.layout).length, 1)
+  assert.equal(closed.history.past.length, 2)
+
+  const back = accepted(undo(closed))
+  assert.equal(placedPanes(back.layout).length, 2, 'and it is one step back')
+})
+
+test('the shell itself is not closed away', () => {
+  const only = ready()
+  // Closing the shell takes down what it shows and leaves the shell standing.
+  const emptied = accepted(closeFrame(only))
+  assert.equal(placedPanes(emptied.layout).length, 1)
+  assert.notEqual(emptyPane(emptied), undefined)
+  assert.equal(emptied.history.past.length, 1)
+
+  // Closing it again has nothing to take down and nowhere to merge: the shell
+  // stays, and a close that moves nothing records nothing.
+  const again = accepted(closeFrame(emptied))
+  assert.equal(placedPanes(again.layout).length, 1)
+  assert.equal(again.history.past.length, 1)
+})
+
 test('a type that refuses closing produces a refusal, not a change', () => {
   const pinned: FrameTypeDefinition = {
     id: 'conversation',
