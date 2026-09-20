@@ -6,7 +6,7 @@ import { createFrameState, withMeasurements } from '../src/model/state.ts'
 import type { FrameState } from '../src/model/state.ts'
 import type { FrameTypeDefinition } from '../src/model/types.ts'
 import type { PaneId } from '../src/vendor/ui-dockkit/contract/types.ts'
-import { closeFrame, floatFrame, openContent, registerFrame, splitFrame, undo } from '../src/ops/intents.ts'
+import { closeFrame, floatFrame, openContent, registerFrame, resizePane, resizeSplit, splitFrame, undo } from '../src/ops/intents.ts'
 import { placedPanes } from '../src/geometry/rects.ts'
 import { project } from '../src/project/project.ts'
 
@@ -62,6 +62,11 @@ function widthsByKind(state: FrameState): Readonly<Record<string, number>> {
     if (kind !== '') out[kind] = Math.round(pane.rect.width * 1000)
   }
   return out
+}
+
+/** One pane's width in px of the fixture's 1000px viewport. */
+function widthOf(state: FrameState, paneId: PaneId): number {
+  return Math.round((placedPanes(state.layout).find((pane) => pane.id === paneId)?.rect.width ?? 0) * 1000)
 }
 
 /** A row of rail | conversation | notes, made the way a person would. */
@@ -163,6 +168,72 @@ test('a projection reports the settled widths, not the renormalised ones', () =>
   const rail = project(closed).docked.find((pane) => pane.content?.typeId === 'rail')
 
   assert.equal(Math.round((rail?.rect.width ?? 0) * 1000), widthsByKind(state).rail)
+})
+
+// ------------------------------------------------- fixed means fixed, both ways
+
+test('a fixed column keeps its width when a sibling asks for room', () => {
+  // The shipped third column opening: somebody asks the middle pane for a share.
+  // The rail used to concede a proportional bite of it and come back narrower —
+  // which is what "grows: false" was supposed to prevent, and did not, because it
+  // only covered room *freed* by a departure and not room *asked for* by a
+  // sibling. The shipped grid kept the rail at its exact width and squeezed the
+  // centre alone (`280px minmax(0, 1fr) 0`).
+  const { state, rail, centre } = threeColumns()
+  const before = widthsByKind(state)
+
+  const asked = accepted(resizePane(state, centre, 0.4))
+  const after = widthsByKind(asked)
+
+  assert.equal(after.rail, before.rail, 'the rail kept its width to the pixel')
+  assert.equal(widthOf(asked, centre), 400, 'and the asker got what it asked for')
+  assert.ok(
+    Math.abs((after.rail ?? 0) + (after.conversation ?? 0) + (after.notes ?? 0) - 1000) <= 2,
+    'the row still fills the frame',
+  )
+  assert.ok((after.notes ?? 0) < 250, 'the room came out of the pane that could give it')
+})
+
+test('asking for more than the rest can give is refused, not rounded down', () => {
+  const { state, centre } = threeColumns()
+  const entries = state.history.past.length
+  const room = 1 - ((widthsByKind(state).rail ?? 0) / 1000)
+  assert.ok(Math.abs(room - 0.5) < 0.01, 'the fixture leaves half the row to the others')
+
+  const result = resizePane(state, centre, room + 0.1)
+
+  assert.equal(result.ok, false)
+  assert.equal(result.ok === false && result.code, 'frames/policy-refused')
+  assert.equal(state.history.past.length, entries, 'and nothing was recorded')
+})
+
+test('a divider drag cannot move a fixed column', () => {
+  const { state, rail } = threeColumns()
+  const before = widthsByKind(state)
+  const split = Object.values(state.layout.nodes).find((node) => node.kind === 'split')
+  assert.equal(split?.kind, 'split')
+
+  // A drag hands over the whole row's sizes, as the renderer does — so a fixed
+  // child anywhere in that row would be moved by a drag that never touched it.
+  const dragged = accepted(resizeSplit(state, (split as { id: string }).id as never, [0.4, 0.3, 0.3]))
+  const after = widthsByKind(dragged)
+
+  assert.equal(after.rail, before.rail, 'the rail did not follow the pointer')
+  assert.ok(
+    Math.abs((after.rail ?? 0) + (after.conversation ?? 0) + (after.notes ?? 0) - 1000) <= 2,
+    'and the row still fills the frame',
+  )
+})
+
+test('the divider beside a fixed column is reported as immovable', () => {
+  const { state } = threeColumns()
+  const [besideRail, besideOthers] = project(state).dividers
+
+  // The projection is what a renderer reads to decide where a grab handle goes:
+  // the core will carry the rail's share over, so that boundary cannot follow a
+  // pointer and the handle should not be offered.
+  assert.equal(besideRail?.movable, false)
+  assert.equal(besideOthers?.movable, true)
 })
 
 

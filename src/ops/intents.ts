@@ -130,6 +130,31 @@ function growsIn(state: FrameState, paneId: PaneId): boolean {
 }
 
 /**
+ * Whether a child's share is its own.
+ *
+ * The other half of `grows: false`, and the half that makes it mean **fixed
+ * width** rather than "grows only sometimes": a fixed child neither absorbs room
+ * a departing sibling frees nor concedes room when a sibling asks for some. Its
+ * share changes only when something asks for *it* — the sidebar's own collapse,
+ * a preset, the divider on its other side.
+ *
+ * Without this, the two halves disagree and the disagreement is visible: opening
+ * the right column asks the centre for room, every sibling gives up a
+ * proportional bite, and a 280px navigation rail comes back 265px — which is what
+ * the shipped grid never did (it kept the rail exactly and squeezed the centre,
+ * `grid-template-columns: 280px minmax(0, 1fr) 0`).
+ *
+ * A nested split is not a pane and declares nothing, so it always concedes: what
+ * is inside it decides for itself.
+ * @param state - the state to read.
+ * @param childId - the child of a split.
+ * @returns true when the child's share must be carried over unchanged.
+ */
+function isFixed(state: FrameState, childId: NodeId): boolean {
+  return state.layout.nodes[childId]?.kind === 'pane' && !growsIn(state, childId as PaneId)
+}
+
+/**
  * Give back the shares a collapse should not have taken.
  *
  * Collapsing a split renormalises what is left, so every survivor takes a
@@ -597,6 +622,15 @@ export function placeTab(
 
 /**
  * Record the net sizes a divider drag reached.
+ *
+ * A drag speaks for the two panes its divider separates, and those two are the
+ * only ones it should move — but it hands over the whole row's sizes, so a fixed
+ * child anywhere in that row would be moved by a drag that never touched it. So
+ * the fixed children are carried over and everything else is renormalised into
+ * what is left, keeping the proportions the drag produced. That is also what
+ * makes a divider beside a fixed column immovable without a special case: the
+ * column does not follow, so the projection stops offering the grab handle
+ * (`ProjectedDivider.movable`).
  * @param state - the state to change.
  * @param splitId - the split whose divider moved.
  * @param sizes - the fractions the drag reached, already clamped by the renderer.
@@ -614,7 +648,18 @@ export function resizeSplit(
   if (sizes.length !== node.sizes.length) {
     return fail('frames/unknown-target', `split "${splitId}" has ${node.sizes.length} child(ren), not ${sizes.length}`)
   }
-  const clamped = clampSizes(sizes)
+  const asked = clampSizes(sizes)
+  const pinned = node.children
+    .reduce((sum, childId, at) => (isFixed(state, childId) ? sum + (node.sizes[at] ?? 0) : sum), 0)
+  const held = node.children
+    .reduce((sum, childId, at) => (isFixed(state, childId) ? sum : sum + (asked[at] ?? 0)), 0)
+  const room = 1 - pinned
+  const next = pinned <= 0 ? asked : node.children.map((childId, at) => {
+    if (isFixed(state, childId)) return node.sizes[at] ?? 0
+    const share = asked[at] ?? 0
+    return held > 0 ? (share / held) * room : room / (node.children.length - 1)
+  })
+  const clamped = clampSizes(next)
   const unchanged = clamped.every((size, index) => Math.abs(size - (node.sizes[index] ?? 0)) < 1e-9)
   if (unchanged) return ok(state)
   return commit(state, planResizeSplit(splitId, clamped))
@@ -879,16 +924,29 @@ export function resizePane(
   const current = parent.sizes[index]
   if (current === undefined) return fail('frames/unknown-target', `split "${parent.id}" has no share for "${paneId}"`)
 
-  const others = parent.children.reduce((sum, childId, at) => (
-    childId === paneId ? sum : sum + (parent.sizes[at] ?? 0)
-  ), 0)
+  const sizeOf = (childId: NodeId): number => parent.sizes[parent.children.indexOf(childId)] ?? 0
+  // A fixed sibling keeps what it has; whatever is asked for comes out of the
+  // rest. Asking for more than the rest can give is not a request this model can
+  // answer, so it is refused rather than silently rounded to something else.
+  const pinned = parent.children
+    .reduce((sum, childId) => (childId === paneId || !isFixed(state, childId) ? sum : sum + sizeOf(childId)), 0)
   const remaining = 1 - fraction
-  const next = parent.children.map((childId, at) => {
+  if (remaining < pinned - 1e-9) {
+    return fail(
+      'frames/policy-refused',
+      `the rest of split "${parent.id}" is fixed at ${String(Math.round(pinned * 100))}%; `
+      + `"${paneId}" can take at most ${String(Math.round((1 - pinned) * 100))}%`,
+    )
+  }
+  const takers = parent.children.filter((childId) => childId !== paneId && !isFixed(state, childId))
+  const held = takers.reduce((sum, childId) => sum + sizeOf(childId), 0)
+  const room = remaining - pinned
+  const next = parent.children.map((childId) => {
     if (childId === paneId) return fraction
-    const share = parent.sizes[at] ?? 0
+    if (isFixed(state, childId)) return sizeOf(childId)
     // With nothing left to take from, the remainder is split evenly — which only
-    // happens when every sibling is already at zero.
-    return others > 0 ? (share / others) * remaining : remaining / (parent.children.length - 1)
+    // happens when every sibling that can move is already at zero.
+    return held > 0 ? (sizeOf(childId) / held) * room : room / takers.length
   })
 
   const clamped = clampSizes(next, minimum)

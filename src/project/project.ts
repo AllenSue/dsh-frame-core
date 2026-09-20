@@ -54,6 +54,14 @@ export interface ProjectedDivider {
   /** The split's own area; a share is a fraction of this, not of the window. */
   readonly parent: NormalizedRect
   readonly rect: NormalizedRect
+  /**
+   * Whether a drag can move this divider at all.
+   *
+   * False when either side is a pane of fixed width: the core carries that pane's
+   * share over whatever the drag asks for, so the boundary cannot follow the
+   * pointer. A renderer should not offer a grab handle it knows does nothing.
+   */
+  readonly movable: boolean
 }
 
 /** How a target draws a floating frame. */
@@ -266,10 +274,36 @@ function visit(walk: Walk, nodeId: string, rect: NormalizedRect): void {
         sizes: node.sizes,
         parent: rect,
         rect: dividerRect(rect, node.axis, node.sizes, index - 1),
+        // Read from the two children this divider separates: a fixed column on
+        // either side means the core will carry that share over, so the boundary
+        // cannot follow a drag. `grows: false` is the same declaration that keeps
+        // the pane from absorbing a departing sibling's room.
+        movable: !fixedChild(walk.state, node.children[index - 1]) && !fixedChild(walk.state, childId),
       })
     }
     visit(walk, childId, rects[index] ?? rect)
   })
+}
+
+/**
+ * Whether a split's child is a pane of fixed width.
+ *
+ * The projection's own reading of `grows: false`, for the divider flag; the ops
+ * layer reads the same declaration when it decides whose share moves (see
+ * `isFixed` in `../ops/intents.ts`). A nested split has no declaration of its own,
+ * so it is never fixed.
+ * @param state - the state to read.
+ * @param childId - a child of a split.
+ * @returns true when the child's share may not be moved by a sibling's request.
+ */
+function fixedChild(state: FrameState, childId: string | undefined): boolean {
+  if (childId === undefined) return false
+  const node = state.layout.nodes[childId as PaneId]
+  if (node === undefined || node.kind !== 'pane') return false
+  const tabId = node.tabs[0]
+  const record = tabId === undefined ? undefined : state.layout.tabs[tabId]
+  if (record === undefined) return false
+  return getType(state.types, record.kind)?.policy?.grows === false
 }
 
 /** Where a floating frame sits when the model recorded no rectangle for it. */

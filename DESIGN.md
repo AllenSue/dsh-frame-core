@@ -302,6 +302,7 @@ classDiagram
         +number[] sizes
         +NormalizedRect parent
         +NormalizedRect rect
+        +boolean movable
     }
     class Degradation {
         +string kind
