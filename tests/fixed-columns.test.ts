@@ -179,7 +179,7 @@ test('a fixed column keeps its width when a sibling asks for room', () => {
   // only covered room *freed* by a departure and not room *asked for* by a
   // sibling. The shipped grid kept the rail at its exact width and squeezed the
   // centre alone (`280px minmax(0, 1fr) 0`).
-  const { state, rail, centre } = threeColumns()
+  const { state, centre } = threeColumns()
   const before = widthsByKind(state)
 
   const asked = accepted(resizePane(state, centre, 0.4))
@@ -208,7 +208,7 @@ test('asking for more than the rest can give is refused, not rounded down', () =
 })
 
 test('a divider drag cannot move a fixed column', () => {
-  const { state, rail } = threeColumns()
+  const { state } = threeColumns()
   const before = widthsByKind(state)
   const split = Object.values(state.layout.nodes).find((node) => node.kind === 'split')
   assert.equal(split?.kind, 'split')
