@@ -108,6 +108,14 @@ export interface ProjectedContent {
   readonly id: string
   readonly kind: string
   readonly title: string
+  /**
+   * Whether a frame displays it, or its owner draws it somewhere else.
+   *
+   * A picker offers only the placeable ones: showing a content whose owner draws
+   * it would fill the chosen frame with whatever this renderer draws for a body
+   * that returns nothing, which is an empty box. See `FrameTypePolicy.placeable`.
+   */
+  readonly placeable: boolean
 }
 
 /** One frame type, as a picker would list it. */
@@ -122,6 +130,8 @@ export interface ProjectedType {
    * an invitation to a refusal.
    */
   readonly instantiable: boolean
+  /** Whether a frame displays it; the same question as for a content. */
+  readonly placeable: boolean
 }
 
 /** Everything a renderer needs for one frame of output. */
@@ -336,10 +346,16 @@ export function project(state: FrameState): FrameViewProjection {
       id: definition.id,
       title: definition.title(),
       instantiable: definition.create !== undefined,
+      placeable: definition.policy?.placeable !== false,
     })),
     contents: [...state.contents.values()]
       .sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
-      .map((content) => ({ id: content.id, kind: content.kind, title: content.title })),
+      .map((content) => ({
+        id: content.id,
+        kind: content.kind,
+        title: content.title,
+        placeable: getType(state.types, content.kind)?.policy?.placeable !== false,
+      })),
     docked: walk.docked,
     floats: walk.floats,
     dividers: walk.dividers,

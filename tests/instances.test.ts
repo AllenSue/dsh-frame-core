@@ -229,9 +229,32 @@ test('the projection lists every type and says which can be instantiated', () =>
   )
 
   assert.deepEqual(project(state).types, [
-    { id: 'conversation', title: 'Conversation', instantiable: false },
-    { id: 'editor', title: 'Editor', instantiable: true },
-    { id: 'console', title: 'Console', instantiable: false },
+    { id: 'conversation', title: 'Conversation', instantiable: false, placeable: true },
+    { id: 'editor', title: 'Editor', instantiable: true, placeable: true },
+    { id: 'console', title: 'Console', instantiable: false, placeable: true },
+  ])
+})
+
+test('a type whose owner draws it elsewhere says so, and its contents carry it', () => {
+  // The compatibility layer's right column: the panel is mounted on the overlay
+  // layer and drawn by the layer, so the frame holding the content draws an empty
+  // box. That is a fact about the type, and it travels to the picker so nobody is
+  // offered a frame that would come up empty.
+  const drawn: FrameTypeDefinition = {
+    id: 'rightbar',
+    title: () => 'Right panel',
+    policy: { placeable: false },
+  }
+  const state = withMeasurements(
+    createFrameState({ startup: drawn, platform: PLATFORM, types: [drawn] }),
+    VIEWPORT,
+  )
+
+  assert.deepEqual(project(state).types, [
+    { id: 'rightbar', title: 'Right panel', instantiable: false, placeable: false },
+  ])
+  assert.deepEqual(project(state).contents, [
+    { id: 'rightbar', kind: 'rightbar', title: 'Right panel', placeable: false },
   ])
 })
 
@@ -243,7 +266,7 @@ test('the projection lists every content the shell holds', () => {
   // A fresh shell holds the content its first frame was seeded with, even though
   // the pane doing the asking is a different one.
   assert.deepEqual(project(state).contents, [
-    { id: 'conversation', kind: 'conversation', title: 'Conversation' },
+    { id: 'conversation', kind: 'conversation', title: 'Conversation', placeable: true },
   ])
 
   const made = accepted(createContent(state, 'editor', pane))

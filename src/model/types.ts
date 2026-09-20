@@ -27,6 +27,20 @@ export interface FrameTypePolicy {
    * column that should have taken the room gets only part of it.
    */
   readonly grows?: boolean
+  /**
+   * Whether a frame can display this type — that is, whether a frame's body draws
+   * it. Defaults to true.
+   *
+   * A type sets this false when **its owner draws it somewhere of the owner's
+   * choosing** rather than in the body of whatever frame holds it. The
+   * compatibility layer's right column is the case that forced the distinction:
+   * its panel has to stay mounted while it is hidden, so its seat is hosted on the
+   * overlay layer, and the frame that reserves the column's width draws an empty
+   * box. Placing that content in a frame of one's own therefore cannot show
+   * anything — which is a fact about the type, not about the frame, so it is
+   * declared here rather than discovered by a person looking at an empty box.
+   */
+  readonly placeable?: boolean
 }
 
 /**
