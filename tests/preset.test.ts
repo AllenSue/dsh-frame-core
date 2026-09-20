@@ -53,13 +53,20 @@ function furnished(): FrameState {
   return accepted(placeFloat(floated, paneId, { x: 0.1, y: 0.1, width: 0.3, height: 0.3 }))
 }
 
-/** A service over the same options, with both types registered and measured. */
-function service(extra: Partial<FramesServiceOptions> = {}): FramesService {
+/**
+ * A service over the same options, with the given types registered and measured.
+ *
+ * The startup type is registered too, not just the second: it seeds the first
+ * frame but is not registered on its behalf, so a split that names it needs this.
+ * A caller that wants a shell *without* some type passes the list it does have —
+ * which is how the load-time rule about unregistered frames is exercised.
+ */
+function service(
+  extra: Partial<FramesServiceOptions> = {},
+  types: readonly FrameTypeDefinition[] = [CONVERSATION, NOTES],
+): FramesService {
   const built = createFramesService({ startup: CONVERSATION, platform: PLATFORM, ...extra })
-  // Both, not just the second: the startup type seeds the first frame but is not
-  // registered on its behalf, so a split that names it needs this too.
-  built.registerType(CONVERSATION)
-  built.registerType(NOTES)
+  for (const type of types) built.registerType(type)
   built.reportMeasurements(VIEWPORT)
   return built
 }
@@ -341,17 +348,16 @@ test('the medium hands the core raw records and the core decides', async () => {
 
 test('a preset saved from one shell loads into another with the same tree', async () => {
   const { port } = medium()
-  const options: FramesServiceOptions = { startup: CONVERSATION, platform: PLATFORM, presets: port }
 
   const author = service({ presets: port })
   author.split(undefined, 'notes')
   await author.savePreset('shared')
   const saved = author.project()
 
-  // A second shell, as a page reload would build it.
-  const reader = createFramesService(options)
-  reader.registerType(NOTES)
-  reader.reportMeasurements(VIEWPORT)
+  // A second shell, as a page reload would build it — with the same types
+  // registered, because a frame whose type this shell lacks is closed on load (a
+  // preset says which kinds of frame were open, not that the plugins are mounted).
+  const reader = service({ presets: port })
   await reader.refreshPresets()
   assert.deepEqual(reader.presetNames(), ['shared'])
   assert.equal((await reader.applyPreset('shared')).ok, true)
@@ -455,21 +461,94 @@ test('a preset holding an empty pane is still a layout the shell can drive', asy
   assert.equal(frames.project().docked[0]?.content, undefined)
 })
 
-test('a preset naming a type the shell never registered still loads', async () => {
+test('a preset naming a type the shell never registered closes that frame', async () => {
   const { port } = medium()
-  const options: FramesServiceOptions = { startup: CONVERSATION, platform: PLATFORM, presets: port }
   const author = service({ presets: port })
   author.split(undefined, 'notes')
   await author.savePreset('with-notes')
 
-  // A preset is data about geometry; the registry is what draws it. A type with
-  // no body still projects as a titled frame, so the tree loads either way.
-  const reader = createFramesService(options)
-  reader.reportMeasurements(VIEWPORT)
+  // A preset is data about geometry; the registry is what draws it. A type with no
+  // plugin behind it has nothing to show, so loading the preset **closes** that
+  // frame instead of leaving a box with a title in it. The load itself still
+  // succeeds: the rest of the layout is what the user asked for.
+  const reader = service({ presets: port }, [CONVERSATION])
+  assert.equal((await reader.applyPreset('with-notes')).ok, true)
+
+  const kinds = reader.project().docked.flatMap((pane) => (pane.content === undefined ? [] : [pane.content.typeId]))
+  assert.deepEqual(kinds, ['conversation'], 'the frame nobody can draw is gone, the rest is the layout')
+  assert.equal(reader.project().docked.length, 1, 'and the split it left collapsed with it')
+})
+
+test('a type the reader does have keeps its frame, so the rule is the registry', async () => {
+  const { port } = medium()
+  const author = service({ presets: port })
+  author.split(undefined, 'notes')
+  await author.savePreset('with-notes')
+
+  const reader = service({ presets: port })
   assert.equal((await reader.applyPreset('with-notes')).ok, true)
 
   const kinds = reader.project().docked.flatMap((pane) => (pane.content === undefined ? [] : [pane.content.typeId]))
   assert.deepEqual(kinds.sort(), ['conversation', 'notes'])
+})
+
+test('an unregistered frame in the middle of a row is closed without disturbing the rest', async () => {
+  const { port } = medium()
+  const author = service({ presets: port })
+  // conversation | notes | conversation: the middle one is what the reader lacks.
+  assert.equal(author.split(undefined, 'notes').ok, true)
+  assert.equal(author.split(author.project().active as never, CONVERSATION.id).ok, true)
+  const before = author.project().docked.map((pane) => Math.round(pane.rect.width * 1000))
+  await author.savePreset('row')
+
+  const reader = service({ presets: port }, [CONVERSATION])
+  assert.equal((await reader.applyPreset('row')).ok, true)
+
+  const after = reader.project().docked
+  assert.equal(after.length, 2, 'two of the three frames are left')
+  // The row still fills the frame, and the survivors keep their *relative* shares:
+  // the room the closed frame held is what the engine's renormalisation takes away.
+  const total = after.reduce((sum, pane) => sum + pane.rect.width, 0)
+  assert.ok(Math.abs(total - 1) < 0.01, `the row fills the frame, it adds to ${String(total)}`)
+  const [first, second] = after.map((pane) => pane.rect.width)
+  assert.ok(
+    Math.abs((first ?? 0) - 2 * (second ?? 0)) < 0.01,
+    `the survivors kept their 2:1 shares: was ${JSON.stringify(before)}, now ${JSON.stringify([first, second])}`,
+  )
+})
+
+test('a preset whose every frame is unregistered still leaves a shell to draw', async () => {
+  const { port } = medium()
+  const author = service({ presets: port })
+  author.split(undefined, 'notes')
+  await author.savePreset('all-notes')
+
+  // A reader with no types at all: every frame goes, and the shell is left with one
+  // empty root — the state a shell is in while it waits for a choice, which is the
+  // only thing it could draw.
+  const reader = service({ presets: port }, [])
+  assert.equal((await reader.applyPreset('all-notes')).ok, true)
+
+  const view = reader.project()
+  assert.equal(view.docked.length, 1, 'one frame')
+  assert.equal(view.docked[0]?.content, undefined, 'and it is waiting for a choice')
+  assert.notEqual(view.docked[0]?.id, undefined, 'with a pane id to focus')
+})
+
+test('a floating frame whose content is unregistered is removed outright', async () => {
+  const { port } = medium()
+  const author = service({ presets: port })
+  assert.equal(author.split(undefined, 'notes').ok, true)
+  const pane = author.project().active as never
+  assert.equal(author.float(pane).ok, true)
+  assert.equal(author.project().floats.length, 1, 'the fixture really floats something')
+  await author.savePreset('with-float')
+
+  const reader = service({ presets: port }, [CONVERSATION])
+  assert.equal((await reader.applyPreset('with-float')).ok, true)
+
+  assert.deepEqual(reader.project().floats, [], 'a float has no parent split to collapse into')
+  assert.equal(reader.project().docked.length, 1, 'and the docked tree is untouched')
 })
 
 test('the name is the one the record carries, so a rename on disk is what loads', async () => {

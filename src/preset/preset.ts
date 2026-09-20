@@ -10,11 +10,13 @@
  * stored one is validated and migrated; where it is kept is a port the host
  * answers, because the same preset has to load in a browser and in a terminal.
  */
-import type { LayoutNode, LayoutState, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
+import type { LayoutNode, LayoutOp, LayoutState, TabId, TabRecord } from '../vendor/ui-dockkit/contract/types.ts'
 import { createIdMinter } from '../vendor/ui-dockkit/engine/initial.ts'
 import type { ContentRegistry } from '../model/content.ts'
 import { registerContent } from '../model/content.ts'
-import { EMPTY_HISTORY } from '../ops/history.ts'
+import { getType } from '../model/types.ts'
+import type { FrameTypeRegistry } from '../model/types.ts'
+import { applyOps, EMPTY_HISTORY } from '../ops/history.ts'
 import { fail, ok, type FrameResult } from '../ops/result.ts'
 import type { FrameState } from '../model/state.ts'
 
@@ -220,7 +222,11 @@ export function parsePreset(raw: unknown): FrameResult<Preset> {
 export function withPreset(state: FrameState, preset: Preset): FrameState {
   // Adopted through the same canonical form, so the shell's live tree and the
   // record on disk are the same shape and a re-save writes identical bytes.
-  const layout = oneContentPerPane(canonicalLayout(preset.layout))
+  const canonical = oneContentPerPane(canonicalLayout(preset.layout))
+  // A preset says which *kinds* of frame were open; it cannot say that the plugins
+  // supplying them are mounted here. Frames whose kind this shell does not have
+  // are closed rather than kept as a titled empty box (see `withoutUnregistered`).
+  const layout = withoutUnregistered(canonical, state.types)
   return {
     ...state,
     layout,
@@ -235,6 +241,70 @@ export function withPreset(state: FrameState, preset: Preset): FrameState {
     activePresetId: preset.name,
     revision: state.revision + 1,
   }
+}
+
+/**
+ * Close every frame whose content names a type this shell has not registered.
+ *
+ * `adoptContents` registers the *contents* a preset references, so a content is
+ * never missing — which is exactly why a preset from a shell with more plugins
+ * used to come back as a box with nothing in it but a title. What is missing is
+ * the plugin that supplies the type, and a frame of a type nobody draws is not a
+ * frame worth keeping: the user's requirement is that loading a preset **closes**
+ * those frames.
+ *
+ * Docked frames go through the same operations a close gesture does
+ * (`closeTab` + `merge`), so the split they leave collapses and the shares of
+ * what remains are renormalised by the engine rather than by arithmetic here. Two
+ * cases cannot: the root frame, which has no parent to collapse into and is left
+ * empty (a shell with no docked area is nothing to draw — an empty root is the
+ * "waiting for a choice" state), and floats, which have no parent split at all and
+ * are removed outright.
+ * @param layout - a validated, canonical layout.
+ * @param types - the types this shell has registered.
+ * @returns the layout without those frames; the same object when there are none.
+ */
+function withoutUnregistered(layout: LayoutState, types: FrameTypeRegistry): LayoutState {
+  /** Whether this pane displays a kind the shell has not registered. */
+  const unregistered = (id: string, current: LayoutState): boolean => {
+    const node = current.nodes[id as keyof typeof current.nodes]
+    if (node === undefined || node.kind !== 'pane') return false
+    const tabId = node.tabs[0]
+    const record = tabId === undefined ? undefined : current.tabs[tabId]
+    return record !== undefined && getType(types, record.kind) === undefined
+  }
+
+  let current = layout
+  const droppedFloats: string[] = []
+  for (const id of Object.keys(layout.nodes)) {
+    // One pane at a time, against the tree as it stands: a merge collapses the
+    // split it leaves behind, and the root of the result may be a pane this loop
+    // has not reached yet — merging *that* one is refused by the engine, which is
+    // the same rule `closeFrame` follows when it leaves an emptied root alone.
+    if (!unregistered(id, current)) continue
+    const node = current.nodes[id as keyof typeof current.nodes]
+    if (node === undefined || node.kind !== 'pane') continue
+    const tabId = node.tabs[0]
+    if (tabId === undefined) continue
+    const ops: LayoutOp[] = [{ type: 'closeTab', tabId }]
+    if (node.host === 'float') droppedFloats.push(id)
+    else if (id !== current.rootId) ops.push({ type: 'merge', paneId: node.id })
+    current = applyOps(current, ops).layout
+  }
+  if (droppedFloats.length === 0) return current
+
+  // A float has no parent split to collapse into, so dropping one is a removal
+  // rather than a close-and-merge.
+  const nodes: Record<string, LayoutNode> = { ...current.nodes }
+  for (const id of droppedFloats) delete nodes[id]
+  const floats = current.floats.filter((id) => !droppedFloats.includes(id))
+  // The focused frame may be one of the casualties; any pane will do, and the
+  // root may now be a split rather than a pane.
+  const survivors = Object.values(nodes).filter((node) => node.kind === 'pane')
+  const activePaneId = nodes[current.activePaneId] === undefined
+    ? survivors[0]?.id ?? current.activePaneId
+    : current.activePaneId
+  return { ...current, nodes, floats, activePaneId }
 }
 
 /**
